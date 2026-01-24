@@ -16,7 +16,7 @@
       align-items: center;
       gap: 12px;
       padding: 12px 16px;
-      background: #111827;
+      background: #101010;
       border-bottom: 1px solid #1f2937;
     }
     #status {
@@ -99,6 +99,90 @@
       return null;
     }
 
+    function isStoragePath(path) {
+      return typeof path === 'string' && (path === '/storage' || path.startsWith('/storage/'));
+    }
+
+    let fsSyncInstalled = false;
+    let fsSyncTimer = null;
+    let fsSyncInProgress = false;
+    let fsSyncPending = false;
+    let fsSyncInterval = null;
+
+    function forceSyncNow(reason) {
+      const fs = getFs();
+      const idbfs = getIdbfs();
+      if (!fs || !idbfs)
+        return;
+      if (fsSyncInProgress) {
+        fsSyncPending = true;
+        return;
+      }
+      fsSyncInProgress = true;
+      fsSyncPending = false;
+      fs.syncfs(false, (err) => {
+        fsSyncInProgress = false;
+        if (err) {
+          console.warn('[Web] Save sync failed:', err);
+        }
+        if (fsSyncPending)
+          forceSyncNow('coalesced');
+      });
+    }
+
+    function scheduleSync(reason) {
+      const fs = getFs();
+      const idbfs = getIdbfs();
+      if (!fs || !idbfs)
+        return;
+      fsSyncPending = true;
+      if (fsSyncTimer)
+        return;
+      fsSyncTimer = setTimeout(() => {
+        fsSyncTimer = null;
+        forceSyncNow(reason || 'debounced');
+      }, 1000);
+    }
+
+    function installFsSyncHooks() {
+      if (fsSyncInstalled)
+        return;
+      const fs = getFs();
+      if (!fs)
+        return;
+
+      fsSyncInstalled = true;
+
+      const origWriteFile = fs.writeFile.bind(fs);
+      fs.writeFile = function(path, data, opts) {
+        const result = origWriteFile(path, data, opts);
+        if (isStoragePath(path))
+          scheduleSync('writeFile');
+        return result;
+      };
+
+      const origClose = fs.close.bind(fs);
+      fs.close = function(stream) {
+        const result = origClose(stream);
+        if (stream && isStoragePath(stream.path))
+          scheduleSync('close');
+        return result;
+      };
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden')
+          forceSyncNow('visibility');
+      });
+      window.addEventListener('pagehide', () => forceSyncNow('pagehide'));
+      window.addEventListener('beforeunload', () => forceSyncNow('beforeunload'));
+
+      if (!fsSyncInterval) {
+        fsSyncInterval = setInterval(() => forceSyncNow('interval'), 15000);
+      }
+
+      setTimeout(() => forceSyncNow('startup'), 5000);
+    }
+
     function setUploadProgress(frac) {
       const p = document.getElementById('uploadProgress');
       if (!p)
@@ -160,6 +244,9 @@
         return new Promise((resolve, reject) => {
           fs.syncfs(true, (err) => err ? reject(err) : resolve());
         });
+      } else {
+        console.warn('[Web] IDBFS is not available; saves will not persist.');
+        setStatus('Warning: Persistent saves unavailable (IDBFS missing)');
       }
     }
 
@@ -334,6 +421,7 @@
           console.info('[Web] Start clicked');
           setStatus('Preparing filesystem...');
           await ensureFsReady();
+          installFsSyncHooks();
           await ensurePreloadConfig();
           hideUploadProgress();
           await ensurePakAvailable(input.files[0]);
