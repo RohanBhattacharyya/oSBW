@@ -3,10 +3,92 @@
 #include "StarCasting.hpp"
 #include "StarLogging.hpp"
 
+#include <vector>
+
 namespace Star {
 
 size_t const MultiTextureCount = 4;
 
+#ifdef __EMSCRIPTEN__
+char const* DefaultVertexShader = R"SHADER(
+#version 300 es
+
+precision highp float;
+precision highp int;
+
+uniform vec2 textureSize0;
+uniform vec2 textureSize1;
+uniform vec2 textureSize2;
+uniform vec2 textureSize3;
+uniform vec2 screenSize;
+uniform mat3 vertexTransform;
+
+in vec2 vertexPosition;
+in vec4 vertexColor;
+in vec2 vertexTextureCoordinate;
+in int vertexData;
+
+out vec2 fragmentTextureCoordinate;
+flat out int fragmentTextureIndex;
+out vec4 fragmentColor;
+
+void main() {
+  vec2 screenPosition = (vertexTransform * vec3(vertexPosition, 1.0)).xy;
+  gl_Position = vec4(screenPosition / screenSize * 2.0 - 1.0, 0.0, 1.0);
+  if (((vertexData >> 3) & 0x1) == 1)
+    screenPosition.x = round(screenPosition.x);
+  if (((vertexData >> 4) & 0x1) == 1)
+    screenPosition.y = round(screenPosition.y);
+  int vertexTextureIndex = vertexData & 0x3;
+  if (vertexTextureIndex == 3)
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize3;
+  else if (vertexTextureIndex == 2)
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize2;
+  else if (vertexTextureIndex == 1)
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize1;
+  else
+    fragmentTextureCoordinate = vertexTextureCoordinate / textureSize0;
+
+  fragmentTextureIndex = vertexTextureIndex;
+  fragmentColor = vertexColor;
+}
+)SHADER";
+
+char const* DefaultFragmentShader = R"SHADER(
+#version 300 es
+
+precision highp float;
+precision highp int;
+
+uniform sampler2D texture0;
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+uniform sampler2D texture3;
+
+in vec2 fragmentTextureCoordinate;
+flat in int fragmentTextureIndex;
+in vec4 fragmentColor;
+
+out vec4 outColor;
+
+void main() {
+  vec4 texColor;
+  if (fragmentTextureIndex == 3)
+    texColor = texture(texture3, fragmentTextureCoordinate);
+  else if (fragmentTextureIndex == 2)
+    texColor = texture(texture2, fragmentTextureCoordinate);
+  else if (fragmentTextureIndex == 1)
+    texColor = texture(texture1, fragmentTextureCoordinate);
+  else
+    texColor = texture(texture0, fragmentTextureCoordinate);
+
+  if (texColor.a <= 0.0)
+    discard;
+
+  outColor = texColor * fragmentColor;
+}
+)SHADER";
+#else
 char const* DefaultVertexShader = R"SHADER(
 #version 140
 
@@ -79,6 +161,7 @@ void main() {
   outColor = texColor * fragmentColor;
 }
 )SHADER";
+#endif
 
 /*
 static void GLAPIENTRY GlMessageCallback(GLenum, GLenum type, GLuint, GLenum, GLsizei, const GLchar* message, const void* renderer) {
@@ -90,12 +173,14 @@ static void GLAPIENTRY GlMessageCallback(GLenum, GLenum type, GLuint, GLenum, GL
 */
 
 OpenGlRenderer::OpenGlRenderer() {
+#ifndef __EMSCRIPTEN__
   auto glewResult = glewInit();
   if (glewResult != GLEW_OK && glewResult != GLEW_ERROR_NO_GLX_DISPLAY)
     throw RendererException::format("Could not initialize GLEW: {}", (char*)glewGetErrorString(glewResult));
 
   if (!GLEW_VERSION_2_0)
     throw RendererException("OpenGL 2.0 not available!");
+#endif
 
   Logger::info("OpenGL version: '{}' vendor: '{}' renderer: '{}' shader: '{}'",
       (const char*)glGetString(GL_VERSION),
@@ -107,10 +192,12 @@ OpenGlRenderer::OpenGlRenderer() {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
+#ifndef __EMSCRIPTEN__
   if (GLEW_VERSION_4_3) {
     //glEnable(GL_DEBUG_OUTPUT);
     //glDebugMessageCallback(GlMessageCallback, this);
   }
+#endif
 
   m_whiteTexture = createGlTexture(Image::filled({1, 1}, Vec4B(255, 255, 255, 255), PixelFormat::RGBA32),
       TextureAddressing::Clamp,
@@ -151,17 +238,28 @@ OpenGlRenderer::GlFrameBuffer::GlFrameBuffer(Json const& fbConfig) : config(fbCo
   if (texture->textureId == 0)
     throw RendererException("Could not generate OpenGL texture for framebuffer");
 
+#ifdef __EMSCRIPTEN__
+  multisample = 0;
+#else
   multisample = GLEW_VERSION_4_0 ? config.getUInt("multisample", 0) : 0;
+#endif
+#ifdef __EMSCRIPTEN__
+  GLenum target = GL_TEXTURE_2D;
+#else
   GLenum target = multisample ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
+#endif
   glBindTexture(target, texture->glTextureId());
 
   sizeDiv = config.getUInt("sizeDiv", 1);
   Vec2U size = jsonToVec2U(config.getArray("size", { 256, 256 })) / sizeDiv;
 
+#ifndef __EMSCRIPTEN__
   if (multisample)
     glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, GL_RGBA8, size[0], size[1], GL_TRUE);
-  else {
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size[0], size[1], 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+  else
+#endif
+  {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size[0], size[1], 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
   }
   auto addressing = TextureAddressingNames.getLeft(config.getString("textureAddressing", "clamp"));
   auto filtering = TextureFilteringNames.getLeft(config.getString("textureFiltering", "nearest"));
@@ -224,12 +322,41 @@ void OpenGlRenderer::loadEffectConfig(String const& name, Json const& effectConf
   GLint status = 0;
   char logBuffer[1024];
 
+  auto normalizeShaderSource = [&](String const& source) -> String {
+#ifdef __EMSCRIPTEN__
+    String normalized = source;
+    size_t versionPos = normalized.find("#version");
+    String body;
+    if (versionPos != NPos) {
+      String afterVersion = normalized.substr(versionPos);
+      size_t lineEnd = afterVersion.find('\n');
+      if (lineEnd != NPos)
+        body = afterVersion.substr(lineEnd + 1);
+      else
+        body = "";
+    } else {
+      body = normalized;
+    }
+
+    body = body.trimBeg();
+
+    String header = "#version 300 es\n";
+    if (!body.contains("precision"))
+      header.append("precision highp float;\nprecision highp int;\n");
+
+    return header + body;
+#else
+    return source;
+#endif
+  };
+
   auto compileShader = [&](GLenum type, String const& name) -> GLuint {
     GLuint shader = glCreateShader(type);
     auto* source = shaders.ptr(name);
     if (!source)
       return 0;
-    char const* sourcePtr = source->utf8Ptr();
+    String normalizedSource = normalizeShaderSource(*source);
+    char const* sourcePtr = normalizedSource.utf8Ptr();
     glShaderSource(shader, 1, &sourcePtr, NULL);
     glCompileShader(shader);
 
@@ -547,6 +674,9 @@ void OpenGlRenderer::setMultiSampling(unsigned multiSampling) {
   if (m_multiSampling == multiSampling)
     return;
 
+#ifdef __EMSCRIPTEN__
+  m_multiSampling = 0;
+#else
   m_multiSampling = multiSampling;
   if (m_multiSampling) {
     glEnable(GL_MULTISAMPLE);
@@ -557,6 +687,7 @@ void OpenGlRenderer::setMultiSampling(unsigned multiSampling) {
     glDisable(GL_SAMPLE_SHADING);
     glDisable(GL_MULTISAMPLE);
   }
+#endif
   loadConfig(m_config);
 }
 
@@ -612,12 +743,15 @@ void OpenGlRenderer::setScreenSize(Vec2U screenSize) {
 
   for (auto& frameBuffer : m_frameBuffers) {
     unsigned sizeDiv = frameBuffer.second->sizeDiv;
+#ifndef __EMSCRIPTEN__
     if (unsigned multisample = frameBuffer.second->multisample) {
       glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, frameBuffer.second->texture->glTextureId());
       glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, multisample, GL_RGBA8, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, GL_TRUE);
-    } else {
+    } else
+#endif
+    {
       glBindTexture(GL_TEXTURE_2D, frameBuffer.second->texture->glTextureId());
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_screenSize[0] / sizeDiv, m_screenSize[1] / sizeDiv, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     }
   }
 }
@@ -702,18 +836,34 @@ void OpenGlRenderer::GlTextureAtlasSet::copyAtlasPixels(
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   GLenum format;
   auto pixelFormat = image.pixelFormat();
+#ifdef __EMSCRIPTEN__
+  Image convertedImage;
+  bool hasConverted = false;
+  if (pixelFormat == PixelFormat::BGR24 || pixelFormat == PixelFormat::BGRA32) {
+    convertedImage = image.convert(PixelFormat::RGBA32);
+    pixelFormat = PixelFormat::RGBA32;
+    hasConverted = true;
+  }
+#endif
   if (pixelFormat == PixelFormat::RGB24)
     format = GL_RGB;
   else if (pixelFormat == PixelFormat::RGBA32)
     format = GL_RGBA;
+#ifndef __EMSCRIPTEN__
   else if (pixelFormat == PixelFormat::BGR24)
     format = GL_BGR;
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
+#endif
   else
     throw RendererException("Unsupported texture format in OpenGlRenderer::TextureGroup::copyAtlasPixels");
 
-  glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, image.data());
+#ifdef __EMSCRIPTEN__
+  auto const* data = hasConverted ? convertedImage.data() : image.data();
+#else
+  auto const* data = image.data();
+#endif
+  glTexSubImage2D(GL_TEXTURE_2D, 0, bottomLeft[0], bottomLeft[1], image.width(), image.height(), format, GL_UNSIGNED_BYTE, data);
 }
 
 OpenGlRenderer::GlTextureGroup::GlTextureGroup(unsigned atlasNumCells)
@@ -972,10 +1122,12 @@ bool OpenGlRenderer::logGlErrorSummary(String prefix) {
         Logger::error("GL_INVALID_FRAMEBUFFER_OPERATION");
       } else if (error == GL_OUT_OF_MEMORY) {
         Logger::error("GL_OUT_OF_MEMORY");
+#ifndef __EMSCRIPTEN__
       } else if (error == GL_STACK_UNDERFLOW) {
         Logger::error("GL_STACK_UNDERFLOW");
       } else if (error == GL_STACK_OVERFLOW) {
         Logger::error("GL_STACK_OVERFLOW");
+#endif
       } else {
         Logger::error("<UNRECOGNIZED GL ERROR>");
       }
@@ -991,14 +1143,32 @@ void OpenGlRenderer::uploadTextureImage(PixelFormat pixelFormat, Vec2U size, uin
   Maybe<GLenum> internalFormat;
   GLenum format;
   GLenum type = GL_UNSIGNED_BYTE;
+#ifdef __EMSCRIPTEN__
+  std::vector<uint8_t> converted;
+  if (pixelFormat == PixelFormat::BGR24 || pixelFormat == PixelFormat::BGRA32) {
+    size_t bpp = pixelFormat == PixelFormat::BGR24 ? 3 : 4;
+    converted.resize(size[0] * size[1] * bpp);
+    for (size_t i = 0; i < size[0] * size[1]; ++i) {
+      converted[i * bpp + 0] = data[i * bpp + 2];
+      converted[i * bpp + 1] = data[i * bpp + 1];
+      converted[i * bpp + 2] = data[i * bpp + 0];
+      if (bpp == 4)
+        converted[i * bpp + 3] = data[i * bpp + 3];
+    }
+    data = converted.data();
+    pixelFormat = bpp == 3 ? PixelFormat::RGB24 : PixelFormat::RGBA32;
+  }
+#endif
   if (pixelFormat == PixelFormat::RGB24)
     format = GL_RGB;
   else if (pixelFormat == PixelFormat::RGBA32)
     format = GL_RGBA;
+#ifndef __EMSCRIPTEN__
   else if (pixelFormat == PixelFormat::BGR24)
     format = GL_BGR;
   else if (pixelFormat == PixelFormat::BGRA32)
     format = GL_BGRA;
+#endif
   else {
     type = GL_FLOAT;
     if (pixelFormat == PixelFormat::RGB_F) {

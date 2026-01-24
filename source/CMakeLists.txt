@@ -72,6 +72,9 @@ endif()
 
 # System name, like windows, macos, linux, freebsd, or (generic) unix
 if(NOT DEFINED STAR_SYSTEM)
+  if(EMSCRIPTEN)
+    set(STAR_SYSTEM "emscripten")
+  endif()
   if(WIN32)
     set(STAR_SYSTEM "windows")
   elseif(APPLE AND ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
@@ -82,6 +85,8 @@ if(NOT DEFINED STAR_SYSTEM)
     set(STAR_SYSTEM "freebsd")
   elseif(${CMAKE_SYSTEM_NAME} STREQUAL "NetBSD")
     set(STAR_SYSTEM "netbsd")
+  elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
+    set(STAR_SYSTEM "emscripten")
   elseif(UNIX)
     set(STAR_SYSTEM "unix")
   else()
@@ -92,6 +97,8 @@ endif()
 if(NOT DEFINED STAR_SYSTEM_FAMILY)
   if(WIN32)
     set(STAR_SYSTEM_FAMILY "windows")
+  elseif(EMSCRIPTEN OR ${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
+    set(STAR_SYSTEM_FAMILY "emscripten")
   elseif(UNIX)
     set(STAR_SYSTEM_FAMILY "unix")
   else()
@@ -141,6 +148,10 @@ option(STAR_USE_JEMALLOC "Use jemalloc allocators" OFF)
 option(STAR_USE_MIMALLOC "Use mimalloc allocators" OFF)
 option(STAR_USE_RPMALLOC "Use rpmalloc allocators" OFF)
 
+if(EMSCRIPTEN)
+  option(STAR_WEB_PTHREADS "Enable Emscripten PThreads (requires COOP/COEP headers)" OFF)
+endif()
+
 # Report all the discovered system / environment settings and all options.
 
 message(STATUS "Source ID: ${STAR_SOURCE_IDENTIFIER}")
@@ -181,6 +192,16 @@ message(STATUS "Using jemalloc: ${STAR_USE_JEMALLOC}")
 message(STATUS "Using mimalloc: ${STAR_USE_MIMALLOC}")
 message(STATUS "Using rpmalloc: ${STAR_USE_RPMALLOC}")
 
+if(EMSCRIPTEN)
+  message(STATUS "Emscripten PThreads: ${STAR_WEB_PTHREADS}")
+endif()
+
+if(EMSCRIPTEN AND STAR_WEB_PTHREADS)
+  add_definitions(-DSTAR_WEB_PTHREADS)
+  add_compile_options(-pthread)
+  add_link_options(-pthread)
+endif()
+
 # Set C defines and cmake variables based on the build settings we have now
 # determined...
 
@@ -212,12 +233,22 @@ elseif(STAR_SYSTEM STREQUAL "freebsd")
   set_flag(STAR_SYSTEM_FREEBSD)
 elseif(STAR_SYSTEM STREQUAL "netbsd")
   set_flag(STAR_SYSTEM_NETBSD)
+elseif(STAR_SYSTEM STREQUAL "emscripten")
+  set_flag(STAR_SYSTEM_EMSCRIPTEN)
 endif()
 
 if(STAR_SYSTEM_FAMILY STREQUAL "windows")
   set_flag(STAR_SYSTEM_FAMILY_WINDOWS)
 elseif(STAR_SYSTEM_FAMILY STREQUAL "unix")
   set_flag(STAR_SYSTEM_FAMILY_UNIX)
+elseif(STAR_SYSTEM_FAMILY STREQUAL "emscripten")
+  set_flag(STAR_SYSTEM_FAMILY_EMSCRIPTEN)
+endif()
+
+if(EMSCRIPTEN)
+  set(STAR_ENABLE_STEAM_INTEGRATION OFF CACHE BOOL "" FORCE)
+  set(STAR_ENABLE_DISCORD_INTEGRATION OFF CACHE BOOL "" FORCE)
+  set(STAR_BUILD_QT_TOOLS OFF CACHE BOOL "" FORCE)
 endif()
 
 if(STAR_COMPILER STREQUAL "gnu")
@@ -455,6 +486,13 @@ elseif(STAR_SYSTEM_NETBSD)
 
 endif()
 
+# Ensure Emscripten ports are available during compile and link.
+if(EMSCRIPTEN)
+  set(EMSCRIPTEN_PORT_FLAGS "-sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${EMSCRIPTEN_PORT_FLAGS}")
+endif()
+
 # Find all required external libraries, based on build settings...
 find_package(PkgConfig)
 
@@ -472,33 +510,37 @@ if (STAR_USE_MIMALLOC)
   set(STAR_EXT_LIBS ${STAR_EXT_LIBS} $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>)
 endif()
 
-find_package(ZLIB REQUIRED)
-find_package(PNG REQUIRED)
-find_package(Freetype REQUIRED)
-find_package(cpr CONFIG REQUIRED)
-find_package(Opus CONFIG REQUIRED)
-find_package(OggVorbis REQUIRED)
-find_package(zstd CONFIG REQUIRED)
-find_package(re2 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-include_directories(SYSTEM
-        ${FREETYPE_INCLUDE_DIRS}
-        ${OGGVORBIS_INCLUDE_DIR}
-)
+if(EMSCRIPTEN)
+  set(STAR_EXT_LIBS ${STAR_EXT_LIBS})
+else()
+  find_package(ZLIB REQUIRED)
+  find_package(PNG REQUIRED)
+  find_package(Freetype REQUIRED)
+  find_package(cpr CONFIG REQUIRED)
+  find_package(Opus CONFIG REQUIRED)
+  find_package(OggVorbis REQUIRED)
+  find_package(zstd CONFIG REQUIRED)
+  find_package(re2 CONFIG REQUIRED)
+  find_package(imgui CONFIG REQUIRED)
+  include_directories(SYSTEM
+    ${FREETYPE_INCLUDE_DIRS}
+    ${OGGVORBIS_INCLUDE_DIR}
+  )
 
-set(STAR_EXT_LIBS ${STAR_EXT_LIBS}
-        ZLIB::ZLIB
-        PNG::PNG
-        cpr::cpr
-    $<IF:$<TARGET_EXISTS:Freetype::Freetype>,Freetype::Freetype,freetype>
-    $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
-    Opus::opus
-    re2::re2
-    imgui::imgui
-    ${VORBISFILE_LIBRARY}
-    ${VORBIS_LIBRARY}
-    ${OGG_LIBRARY}
-)
+  set(STAR_EXT_LIBS ${STAR_EXT_LIBS}
+    ZLIB::ZLIB
+    PNG::PNG
+    cpr::cpr
+      $<IF:$<TARGET_EXISTS:Freetype::Freetype>,Freetype::Freetype,freetype>
+      $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>
+      Opus::opus
+      re2::re2
+      imgui::imgui
+      ${VORBISFILE_LIBRARY}
+      ${VORBIS_LIBRARY}
+      ${OGG_LIBRARY}
+  )
+endif()
 
 pkg_check_modules(PKG_WAYLAND "wayland-client>=1.18" wayland-egl wayland-cursor egl "xkbcommon>=0.5.0")
 if (PKG_WAYLAND_FOUND)
@@ -515,21 +557,26 @@ if(STAR_SYSTEM_FAMILY STREQUAL "unix")
 endif()
 
 if(STAR_BUILD_GUI)
-  find_package(SDL3 CONFIG REQUIRED)
+  if(EMSCRIPTEN)
+    set(STAR_EXT_GUI_LIBS "")
+    add_compile_options(-idirafter /usr/include)
+  else()
+    find_package(SDL3 CONFIG REQUIRED)
 
-  set(STAR_EXT_GUI_LIBS
-    $<TARGET_NAME_IF_EXISTS:SDL3::SDL3main>
-    $<IF:$<TARGET_EXISTS:SDL3::SDL3>,SDL3::SDL3,SDL3::SDL3-static>
-  )
+    set(STAR_EXT_GUI_LIBS
+      $<TARGET_NAME_IF_EXISTS:SDL3::SDL3main>
+      $<IF:$<TARGET_EXISTS:SDL3::SDL3>,SDL3::SDL3,SDL3::SDL3-static>
+    )
 
-  find_package(OpenGL REQUIRED)
-  find_package(GLEW REQUIRED)
+    find_package(OpenGL REQUIRED)
+    find_package(GLEW REQUIRED)
 
-  include_directories(SYSTEM ${GLEW_INCLUDE_DIR})
-  set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS}
-      ${OPENGL_LIBRARY}
-      GLEW::glew_s
-  )
+    include_directories(SYSTEM ${GLEW_INCLUDE_DIR})
+    set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS}
+        ${OPENGL_LIBRARY}
+        GLEW::glew_s
+    )
+  endif()
 
   if(STAR_SYSTEM_MACOS)
     set(STAR_EXT_GUI_LIBS ${STAR_EXT_GUI_LIBS} "-framework CoreAudio")
@@ -553,12 +600,20 @@ endif()
 set(BUILD_SHARED_LIBS false)
 
 # First set output dir for the generic no-config case (e.g. macos / linux)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist)
+set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist)
+if(EMSCRIPTEN)
+  set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist-web)
+  if(STAR_WEB_PTHREADS)
+    set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist-web-pthreads)
+  endif()
+endif()
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${STAR_RUNTIME_OUTPUT_DIRECTORY})
 
 # Second, set output dir for multi-config builds (e.g. msvc)
 foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
   string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${PROJECT_SOURCE_DIR}/../dist)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${STAR_RUNTIME_OUTPUT_DIRECTORY})
 endforeach(OUTPUTCONFIG CMAKE_CONFIGURATION_TYPES)
 
 # External code included with starbound source, which core depends on

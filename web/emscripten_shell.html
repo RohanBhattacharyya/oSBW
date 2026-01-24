@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenStarbound (Web)</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0b0f14;
+      color: #e5e7eb;
+    }
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #111827;
+      border-bottom: 1px solid #1f2937;
+    }
+    #status {
+      margin-left: auto;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+    #canvas {
+      width: 100vw;
+      height: calc(100vh - 56px);
+      display: block;
+      background: #000;
+    }
+    .btn {
+      background: #2563eb;
+      border: none;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    input[type="file"] {
+      color: #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <strong>OpenStarbound Web</strong>
+    <input id="pakInput" type="file" accept=".pak" />
+    <button id="startBtn" class="btn" disabled>Start</button>
+    <div id="status">Waiting for runtime...</div>
+  </div>
+  <progress id="uploadProgress" value="0" max="1" style="width: 100%; height: 6px; display: none;"></progress>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+
+  <script>
+    function setStatus(text) {
+      const el = document.getElementById('status');
+      if (el) el.textContent = text;
+    }
+
+    function resizeCanvasToDisplaySize() {
+      const canvas = document.getElementById('canvas');
+      if (!canvas)
+        return;
+      const ratio = window.devicePixelRatio || 1;
+      const cssWidth = canvas.clientWidth || window.innerWidth;
+      const cssHeight = canvas.clientHeight || (window.innerHeight - 56);
+      const width = Math.max(1, Math.floor(cssWidth * ratio));
+      const height = Math.max(1, Math.floor(cssHeight * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        if (typeof Module !== 'undefined' && typeof Module.setCanvasSize === 'function')
+          Module.setCanvasSize(width, height, true);
+      }
+    }
+
+    function getFs() {
+      return Module.FS || Module['FS'] || (typeof FS !== 'undefined' ? FS : null);
+    }
+
+    function getIdbfs() {
+      const fs = getFs();
+      if (fs && fs.filesystems && fs.filesystems.IDBFS)
+        return fs.filesystems.IDBFS;
+      return null;
+    }
+
+    function getWorkerFs() {
+      const fs = getFs();
+      if (fs && fs.filesystems && fs.filesystems.WORKERFS)
+        return fs.filesystems.WORKERFS;
+      return null;
+    }
+
+    function setUploadProgress(frac) {
+      const p = document.getElementById('uploadProgress');
+      if (!p)
+        return;
+      if (typeof frac !== 'number' || !isFinite(frac))
+        frac = 0;
+      p.value = Math.max(0, Math.min(1, frac));
+      p.style.display = 'block';
+    }
+
+    function hideUploadProgress() {
+      const p = document.getElementById('uploadProgress');
+      if (!p)
+        return;
+      p.style.display = 'none';
+      p.value = 0;
+    }
+
+    function formatBytes(bytes) {
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let value = bytes;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+      }
+      const digits = unit === 0 ? 0 : (unit <= 2 ? 1 : 2);
+      return `${value.toFixed(digits)} ${units[unit]}`;
+    }
+
+    function waitForFsAvailable(timeoutMs = 5000) {
+      return new Promise((resolve, reject) => {
+        const start = performance.now();
+        const tick = () => {
+          const fs = getFs();
+          if (fs)
+            return resolve(fs);
+          if (performance.now() - start > timeoutMs)
+            return reject(new Error('Filesystem not ready yet. Please wait for runtime initialization.'));
+          requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    }
+
+    async function ensureFsReady() {
+      const fs = await waitForFsAvailable();
+      const idbfs = getIdbfs();
+
+      if (!fs.analyzePath('/uploads').exists)
+        fs.mkdir('/uploads');
+      if (!fs.analyzePath('/storage').exists)
+        fs.mkdir('/storage');
+      if (!fs.analyzePath('/overrides').exists)
+        fs.mkdir('/overrides');
+
+      if (idbfs) {
+        fs.mount(idbfs, {}, '/storage');
+        return new Promise((resolve, reject) => {
+          fs.syncfs(true, (err) => err ? reject(err) : resolve());
+        });
+      }
+    }
+
+    async function ensurePreloadConfig() {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      const targetPath = '/overrides/preload.config';
+      if (fs.analyzePath(targetPath).exists)
+        return;
+
+      try {
+        const resp = await fetch('preload.config', { cache: 'no-store' });
+        if (!resp.ok)
+          throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        fs.writeFile(targetPath, text);
+        console.info('[Web] Wrote preload.config to /overrides');
+      } catch (err) {
+        console.warn('[Web] Failed to fetch preload.config, using minimal default', err);
+        const fallback = JSON.stringify([
+          { type: "json", path: "/player.config:inventoryFilters" }
+        ], null, 2);
+        fs.writeFile(targetPath, fallback);
+      }
+    }
+
+    function canUseWorkerFs() {
+      return !!getWorkerFs();
+    }
+
+    function isUploadsMounted() {
+      const fs = getFs();
+      if (!fs || !fs.mounts)
+        return false;
+      return fs.mounts.some((m) => m.mountpoint === '/uploads');
+    }
+
+    function unmountUploadsIfNeeded() {
+      const fs = getFs();
+      if (!fs || !fs.unmount)
+        return;
+      if (isUploadsMounted()) {
+        try {
+          fs.unmount('/uploads');
+        } catch (err) {
+          console.warn('[Web] Failed to unmount /uploads:', err);
+        }
+      }
+    }
+
+    function mountPakWorkerFs(file) {
+      const fs = getFs();
+      const workerFs = getWorkerFs();
+      if (!fs || !workerFs)
+        return false;
+
+      unmountUploadsIfNeeded();
+      if (!fs.analyzePath('/uploads').exists)
+        fs.mkdir('/uploads');
+
+      fs.mount(workerFs, { files: [file] }, '/uploads');
+      return true;
+    }
+
+    async function writePak(file) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+
+      const path = '/uploads/packed.pak';
+      const size = typeof file.size === 'number' ? file.size : 0;
+      const chunkSize = 4 * 1024 * 1024;
+      let written = 0;
+
+      // Stream the file into MEMFS in chunks to avoid locking the UI thread.
+      const fd = fs.open(path, 'w+');
+      try {
+        while (written < size) {
+          const end = Math.min(written + chunkSize, size);
+          const buf = new Uint8Array(await file.slice(written, end).arrayBuffer());
+          fs.write(fd, buf, 0, buf.length, written);
+          written = end;
+          const frac = size ? (written / size) : 1;
+          setUploadProgress(frac);
+          setStatus(`Uploading packed.pak... ${Math.floor(frac * 100)}% (${formatBytes(written)} / ${formatBytes(size)})`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      } finally {
+        fs.close(fd);
+      }
+    }
+
+    async function ensurePakAvailable(file) {
+      const size = typeof file.size === 'number' ? file.size : 0;
+      if (canUseWorkerFs()) {
+        setStatus('Mounting packed.pak...');
+        const mounted = mountPakWorkerFs(file);
+        if (mounted) {
+          setUploadProgress(1);
+          setStatus(`Mounted packed.pak (${formatBytes(size)})`);
+          return;
+        }
+      }
+      setUploadProgress(0);
+      setStatus('Uploading packed.pak...');
+      await writePak(file);
+    }
+
+    function writeBootConfig() {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      const pthreadsAvailable = typeof PThread !== 'undefined' || (typeof Module !== 'undefined' && typeof Module.PThread !== 'undefined');
+      const poolSize = (pthreadsAvailable && self.crossOriginIsolated) ? 4 : 0;
+      const sbinit = {
+        assetSources: ["/overrides", "/uploads/packed.pak"],
+        storageDirectory: "/storage",
+        logDirectory: "/storage/logs",
+        logFileBackups: 1,
+        includeUGC: false,
+        assetsSettings: {
+          workerPoolSize: poolSize
+        },
+        defaultConfiguration: {
+          safe: {
+            enableImGui: false
+          }
+        }
+      };
+      const json = JSON.stringify(sbinit, null, 2);
+      fs.writeFile('/sbinit.config', json);
+    }
+
+    let runtimeReady = false;
+
+    function wireUi() {
+      const input = document.getElementById('pakInput');
+      const startBtn = document.getElementById('startBtn');
+      const canvas = document.getElementById('canvas');
+
+      runtimeReady = true;
+
+      const updateStartButton = () => {
+        startBtn.disabled = !(runtimeReady && input.files && input.files.length > 0);
+      };
+
+      waitForFsAvailable().then(updateStartButton).catch(() => {
+        setStatus('Runtime ready. Waiting for filesystem...');
+      });
+
+      input.addEventListener('change', () => {
+        updateStartButton();
+      });
+
+      if (canvas) {
+        canvas.addEventListener('pointerdown', () => {
+          canvas.focus();
+        });
+      }
+
+      window.addEventListener('resize', () => {
+        resizeCanvasToDisplaySize();
+      });
+
+      startBtn.addEventListener('click', async () => {
+        if (!input.files || input.files.length === 0) {
+          setStatus('Please select packed.pak');
+          return;
+        }
+        try {
+          console.info('[Web] Start clicked');
+          setStatus('Preparing filesystem...');
+          await ensureFsReady();
+          await ensurePreloadConfig();
+          hideUploadProgress();
+          await ensurePakAvailable(input.files[0]);
+          hideUploadProgress();
+          setStatus('Writing config...');
+          writeBootConfig();
+          setStatus('Starting...');
+          resizeCanvasToDisplaySize();
+          if (canvas) canvas.focus();
+          if (typeof Module.callMain !== 'function') {
+            console.error('[Web] Module.callMain missing', Module);
+            throw new Error('Runtime not ready (callMain unavailable).');
+          }
+          console.info('[Web] callMain()');
+          try {
+            const exitCode = Module.callMain([]);
+            console.info('[Web] callMain() returned', exitCode);
+          } catch (err) {
+            console.error('[Web] callMain() threw', err);
+            throw err;
+          }
+        } catch (err) {
+          console.error(err);
+          setStatus('Failed: ' + err);
+        }
+      });
+
+      updateStartButton();
+      setStatus('Ready. Upload packed.pak to start.');
+    }
+
+    var Module = {
+      preRun: [],
+      postRun: [],
+      noInitialRun: true,
+      print: (...args) => console.log(...args),
+      printErr: (...args) => console.error(...args),
+      canvas: (() => document.getElementById('canvas'))(),
+      onAbort: (reason) => {
+        console.error('[Web] Abort:', reason);
+        setStatus('Runtime aborted: ' + reason);
+      },
+      onExit: (code) => {
+        console.info('[Web] Exit:', code);
+      },
+      onRuntimeInitialized: () => {
+        console.info('[Web] Runtime initialized');
+        resizeCanvasToDisplaySize();
+        wireUi();
+      },
+    };
+
+    window.addEventListener('error', (event) => {
+      console.error('[Web] Window error:', event.message, event.error);
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      console.error('[Web] Unhandled rejection:', event.reason);
+    });
+  </script>
+
+  {{{ SCRIPT }}}
+</body>
+</html>

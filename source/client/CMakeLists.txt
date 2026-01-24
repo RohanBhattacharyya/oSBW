@@ -37,7 +37,7 @@ ENDIF()
 
 IF(STAR_SYSTEM_MACOS)
   SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "-Wl,-rpath,'@executable_path'")
-ELSEIF (UNIX)
+ELSEIF (UNIX AND NOT EMSCRIPTEN)
   SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "-Wl,--export-dynamic,-rpath,'$ORIGIN'")
 ENDIF()
 
@@ -46,3 +46,66 @@ IF (STAR_SYSTEM_MACOS)
 ENDIF()
 
 TARGET_LINK_LIBRARIES (starbound ${STAR_EXT_LIBS} ${STAR_EXT_GUI_LIBS})
+
+IF(EMSCRIPTEN)
+  SET_TARGET_PROPERTIES (starbound PROPERTIES SUFFIX ".html")
+  SET(starbound_em_link_flags "--shell-file ${PROJECT_SOURCE_DIR}/../web/emscripten_shell.html -sEXPORTED_RUNTIME_METHODS=callMain,FS,setCanvasSize -sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -sSAFE_HEAP=1 -sEXCEPTION_DEBUG=1 -sNO_DISABLE_EXCEPTION_CATCHING -sUSE_SDL=3 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1 --preload-file ${PROJECT_SOURCE_DIR}/../assets/opensb@/overrides")
+
+  if(STAR_WEB_PTHREADS)
+    # Requires COOP/COEP headers (crossOriginIsolated) to run in browsers.
+    string(APPEND starbound_em_link_flags " -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=16")
+  endif()
+
+  # Emscripten packs the preloaded files into the .data at link time, but changes under assets/
+  # aren't tracked by default. Add a stamp file that depends on the Lua scripts so edits trigger
+  # a relink (and therefore an updated .data).
+  file(GLOB_RECURSE opensb_lua_scripts CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/../assets/opensb/scripts/*.lua")
+  set(opensb_assets_stamp "${CMAKE_CURRENT_BINARY_DIR}/opensb_assets.stamp")
+  add_custom_command(
+    OUTPUT "${opensb_assets_stamp}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${opensb_assets_stamp}"
+    DEPENDS ${opensb_lua_scripts}
+    VERBATIM)
+  add_custom_target(opensb_assets DEPENDS "${opensb_assets_stamp}")
+  add_dependencies(starbound opensb_assets)
+  set_property(TARGET starbound APPEND PROPERTY LINK_DEPENDS "${opensb_assets_stamp}")
+
+  # Web builds: convert OpenSB WOFF2 fonts to TTF, since Emscripten's FreeType build may not
+  # support WOFF2 and UI (e.g. settings menu) uses OpenSB fonts like iosevka-semibold.
+  file(GLOB_RECURSE opensb_woff2_fonts CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/../assets/opensb/font/*.woff2")
+  set(opensb_web_fonts_dir "${CMAKE_CURRENT_BINARY_DIR}/opensb_web_fonts")
+  set(opensb_web_fonts_stamp "${CMAKE_CURRENT_BINARY_DIR}/opensb_web_fonts.stamp")
+  find_program(PYTHON3_EXECUTABLE python3)
+  if(NOT PYTHON3_EXECUTABLE)
+    message(FATAL_ERROR "python3 is required for EMSCRIPTEN web builds (font conversion step)")
+  endif()
+
+  add_custom_command(
+    OUTPUT "${opensb_web_fonts_stamp}"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${opensb_web_fonts_dir}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${opensb_web_fonts_dir}"
+    COMMAND ${PYTHON3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/../web/convert_woff2_fonts.py"
+      --src "${PROJECT_SOURCE_DIR}/../assets/opensb/font"
+      --dst "${opensb_web_fonts_dir}/font"
+    COMMAND ${CMAKE_COMMAND} -E touch "${opensb_web_fonts_stamp}"
+    DEPENDS ${opensb_woff2_fonts} "${PROJECT_SOURCE_DIR}/../web/convert_woff2_fonts.py"
+    VERBATIM)
+
+  add_custom_target(opensb_web_fonts DEPENDS "${opensb_web_fonts_stamp}")
+  add_dependencies(starbound opensb_web_fonts)
+  set_property(TARGET starbound APPEND PROPERTY LINK_DEPENDS "${opensb_web_fonts_stamp}")
+
+  # Preload converted fonts under /overrides (in addition to the standard OpenSB overrides).
+  string(APPEND starbound_em_link_flags " --preload-file ${opensb_web_fonts_dir}@/overrides")
+
+  # Set link flags once (avoid CMake list semantics inserting ';' which breaks the shell command).
+  SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "${starbound_em_link_flags}")
+
+  add_custom_command(TARGET starbound POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${PROJECT_SOURCE_DIR}/../assets/opensb/preload.config
+      $<TARGET_FILE_DIR:starbound>/preload.config
+    COMMENT "Copy preload.config into web output")
+ENDIF()

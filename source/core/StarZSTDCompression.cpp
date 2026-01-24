@@ -1,4 +1,61 @@
 #include "StarZSTDCompression.hpp"
+
+#ifdef __EMSCRIPTEN__
+
+namespace Star {
+
+CompressionStream::CompressionStream() : m_cStream(nullptr) {}
+
+CompressionStream::~CompressionStream() {}
+
+void CompressionStream::compress(const char*, size_t, ByteArray&) {
+  throw IOException("ZSTD compression is not supported in web builds");
+}
+
+void CompressionStream::compress(ByteArray const& in, ByteArray& out) {
+  return compress(in.ptr(), in.size(), out);
+}
+
+ByteArray CompressionStream::compress(const char* in, size_t inLen) {
+  ByteArray out;
+  compress(in, inLen, out);
+  return out;
+}
+
+ByteArray CompressionStream::compress(ByteArray const& in) {
+  ByteArray out;
+  compress(in.ptr(), in.size(), out);
+  return out;
+}
+
+DecompressionStream::DecompressionStream() : m_dStream(nullptr) {}
+
+DecompressionStream::~DecompressionStream() {}
+
+void DecompressionStream::decompress(const char*, size_t, ByteArray&) {
+  throw IOException("ZSTD decompression is not supported in web builds");
+}
+
+void DecompressionStream::decompress(ByteArray const& in, ByteArray& out) {
+  return decompress(in.ptr(), in.size(), out);
+}
+
+ByteArray DecompressionStream::decompress(const char* in, size_t inLen) {
+  ByteArray out;
+  decompress(in, inLen, out);
+  return out;
+}
+
+ByteArray DecompressionStream::decompress(ByteArray const& in) {
+  ByteArray out;
+  decompress(in.ptr(), in.size(), out);
+  return out;
+}
+
+}
+
+#else
+
 #include <zstd.h>
 
 namespace Star {
@@ -103,3 +160,5 @@ ByteArray DecompressionStream::decompress(ByteArray const& in) {
 }
 
 }
+
+#endif

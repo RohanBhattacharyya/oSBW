@@ -210,6 +210,16 @@ IF (STAR_SYSTEM_FAMILY_UNIX)
       StarThread_unix.cpp
       StarTime_unix.cpp
     )
+ELSEIF (STAR_SYSTEM_FAMILY_EMSCRIPTEN)
+  SET (star_core_SOURCES ${star_core_SOURCES}
+      StarException_emscripten.cpp
+      StarFile_unix.cpp
+      StarLockFile_unix.cpp
+      StarThread_unix.cpp
+      StarTime_unix.cpp
+      StarSecureRandom_emscripten.cpp
+      StarSignalHandler_emscripten.cpp
+    )
 ELSEIF (STAR_SYSTEM_FAMILY_WINDOWS)
   SET (star_core_HEADERS ${star_core_HEADERS}
       StarString_windows.hpp

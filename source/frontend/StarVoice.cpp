@@ -1,4 +1,143 @@
 #include "StarVoice.hpp"
+
+#ifdef __EMSCRIPTEN__
+#include "StarJsonExtra.hpp"
+
+namespace Star {
+
+EnumMap<VoiceInputMode> const VoiceInputModeNames{
+  {VoiceInputMode::VoiceActivity, "VoiceActivity"},
+  {VoiceInputMode::PushToTalk, "PushToTalk"}
+};
+
+EnumMap<VoiceChannelMode> const VoiceChannelModeNames{
+  {VoiceChannelMode::Mono, "Mono"},
+  {VoiceChannelMode::Stereo, "Stereo"}
+};
+
+Voice* Voice::s_singleton = nullptr;
+
+static void noopOpusDecoder(OpusDecoder*) {}
+static void noopOpusEncoder(OpusEncoder*) {}
+
+Voice::Speaker::Speaker(SpeakerId id)
+  : decoderMono(nullptr, noopOpusDecoder)
+  , decoderStereo(nullptr, noopOpusDecoder) {
+  speakerId = id;
+}
+
+Json Voice::Speaker::toJson() const {
+  return JsonObject{
+    {"speakerId", speakerId},
+    {"entityId", entityId},
+    {"name", name},
+    {"muted", (bool)muted},
+    {"playing", (bool)playing}
+  };
+}
+
+Voice* Voice::singletonPtr() {
+  return s_singleton;
+}
+
+Voice& Voice::singleton() {
+  if (!s_singleton)
+    throw VoiceException("Voice not initialized", false);
+  return *s_singleton;
+}
+
+Voice::Voice(ApplicationControllerPtr)
+  : m_encoder(nullptr, noopOpusEncoder) {
+  s_singleton = this;
+}
+
+Voice::~Voice() {
+  if (s_singleton == this)
+    s_singleton = nullptr;
+}
+
+void Voice::init() {}
+
+void Voice::loadJson(Json const&, bool) {}
+
+Json Voice::saveJson() const {
+  return JsonObject();
+}
+
+void Voice::save() const {}
+
+void Voice::scheduleSave() {}
+
+Voice::SpeakerPtr Voice::setLocalSpeaker(SpeakerId speakerId) {
+  m_speakerId = speakerId;
+  m_clientSpeaker = make_shared<Speaker>(speakerId);
+  m_speakers[speakerId] = m_clientSpeaker;
+  return m_clientSpeaker;
+}
+
+Voice::SpeakerPtr Voice::localSpeaker() {
+  return m_clientSpeaker;
+}
+
+Voice::SpeakerPtr Voice::speaker(SpeakerId speakerId) {
+  if (auto ptr = m_speakers.ptr(speakerId))
+    return *ptr;
+  auto sp = make_shared<Speaker>(speakerId);
+  m_speakers[speakerId] = sp;
+  return sp;
+}
+
+HashMap<Voice::SpeakerId, Voice::SpeakerPtr>& Voice::speakers() {
+  return m_speakers;
+}
+
+List<Voice::SpeakerPtr> Voice::sortedSpeakers(bool) {
+  List<SpeakerPtr> result;
+  for (auto const& pair : m_speakers)
+    result.append(pair.second);
+  return result;
+}
+
+void Voice::clearSpeakers() {
+  m_speakers.clear();
+  m_activeSpeakers.clear();
+  m_clientSpeaker.reset();
+}
+
+void Voice::readAudioData(uint8_t*, int) {}
+
+void Voice::mix(int16_t*, size_t, unsigned) {}
+
+void Voice::update(float, PositionalAttenuationFunction) {}
+
+void Voice::setDeviceName(Maybe<String>) {}
+
+StringList Voice::availableDevices() {
+  return {};
+}
+
+int Voice::send(DataStreamBuffer&, size_t) {
+  return 0;
+}
+
+bool Voice::receive(SpeakerPtr, std::string_view) {
+  return false;
+}
+
+void Voice::setInput(bool) {}
+
+OpusDecoder* Voice::createDecoder(int) {
+  return nullptr;
+}
+
+OpusEncoder* Voice::createEncoder(int) {
+  return nullptr;
+}
+
+}
+
+#else
+
 #include "StarFormat.hpp"
 #include "StarJsonExtra.hpp"
 #include "StarApplicationController.hpp"
@@ -752,3 +891,5 @@ void Voice::thread() {
 }
 
 }// namespace Star
+
+#endif

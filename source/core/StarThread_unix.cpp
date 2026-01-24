@@ -65,6 +65,13 @@ struct ThreadImpl {
 
     stopped = false;
     joined = false;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+    mutexLocker.unlock();
+    runThread(this);
+    mutexLocker.lock();
+    joined = true;
+    return true;
+#endif
     int ret = pthread_create(&pthread, NULL, &runThread, (void*)this);
     if (ret != 0) {
       stopped = true;
@@ -80,6 +87,8 @@ struct ThreadImpl {
     pthread_set_name_np(pthread, tname);
 #elif defined(STAR_SYSTEM_NETBSD)
     pthread_setname_np(pthread, "%s", tname);
+#elif defined(STAR_SYSTEM_EMSCRIPTEN)
+  // pthread_setname_np is not available on Emscripten
 #elif not defined STAR_SYSTEM_MACOS
     pthread_setname_np(pthread, tname);
 #endif

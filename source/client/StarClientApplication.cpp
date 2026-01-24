@@ -31,8 +31,10 @@
 #include "StarHttpTrustDialog.hpp"
 #include "StarMainInterfaceTypes.hpp"
 
+#ifndef __EMSCRIPTEN__
 #include "imgui.h"
 #include "imgui_freetype.h"
+#endif
 
 #if defined STAR_SYSTEM_WINDOWS
 #include <windows.h>
@@ -235,6 +237,7 @@ void ClientApplication::applicationInit(ApplicationControllerPtr appController) 
 
   auto assets = m_root->assets();
 
+#ifndef __EMSCRIPTEN__
   {
     auto& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
@@ -245,6 +248,7 @@ void ClientApplication::applicationInit(ApplicationControllerPtr appController) 
     io.Fonts->AddFontFromMemoryTTF(m_immediateFont.ptr(), m_immediateFont.size(),
       16, &config, io.Fonts->GetGlyphRangesDefault());
   }
+#endif
 
   m_minInterfaceScale = assets->json("/interface.config:minInterfaceScale").toFloat();
   m_maxInterfaceScale = assets->json("/interface.config:maxInterfaceScale").toFloat();

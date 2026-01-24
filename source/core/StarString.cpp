@@ -4,7 +4,11 @@
 #include "StarFormat.hpp"
 
 #include <cctype>
+#ifdef __EMSCRIPTEN__
+#include <regex>
+#else
 #include <re2/re2.h>
+#endif
 
 namespace Star {
 
@@ -713,6 +717,17 @@ bool String::contains(String const& s, CaseSensitivity cs) const {
 }
 
 bool String::regexMatch(String const& regex, bool full, bool caseSensitive) const {
+#ifdef __EMSCRIPTEN__
+  try {
+    auto flags = std::regex::ECMAScript;
+    if (!caseSensitive)
+      flags |= std::regex::icase;
+    std::regex re(regex.utf8(), flags);
+    return full ? std::regex_match(utf8(), re) : std::regex_search(utf8(), re);
+  } catch (std::regex_error const& e) {
+    throw StringException::format("Invalid regex pattern '{}': {}", regex, e.what());
+  }
+#else
   re2::RE2::Options options;
   options.set_case_sensitive(caseSensitive);
   RE2 re(regex.utf8(), options);
@@ -720,6 +735,7 @@ bool String::regexMatch(String const& regex, bool full, bool caseSensitive) cons
     throw StringException::format("Invalid regex pattern '{}': {}", regex, re.error());
 
   return full ? RE2::FullMatch(utf8(), re) : RE2::PartialMatch(utf8(), re);
+#endif
 }
 int String::compare(String const& s, CaseSensitivity cs) const {
   if (cs == CaseSensitive)

@@ -1,6 +1,7 @@
 #include "StarFont.hpp"
 #include "StarFile.hpp"
 #include "StarFormat.hpp"
+#include "StarLogging.hpp"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -44,7 +45,7 @@ FontPtr Font::loadFont(ByteArrayConstPtr const& bytes, unsigned pixelSize) {
   return font;
 }
 
-Font::Font() : m_pixelSize(0), m_alphaThreshold(0) {}
+Font::Font() : m_pixelSize(0), m_alphaThreshold(0), m_loadFailed(false) {}
 
 Font::~Font() {
   if (m_fontImpl)
@@ -79,6 +80,8 @@ unsigned Font::width(String::Char c) {
     return *width;
   } else {
     loadFontImpl();
+    if (!m_fontImpl)
+      return 0;
     FT_Load_Char(m_fontImpl->face, c, FontLoadFlags);
     unsigned newWidth = (m_fontImpl->face->glyph->linearHoriAdvance + 32768) / 65536;
     m_widthCache.insert({c, m_pixelSize}, newWidth);
@@ -87,23 +90,63 @@ unsigned Font::width(String::Char c) {
 }
 
 void Font::loadFontImpl() {
-  if (!m_fontImpl) {
-    if (!m_fontBuffer || m_fontBuffer->empty())
-      throw FontException("Font buffer is null or empty");
+  if (m_fontImpl || m_loadFailed)
+    return;
 
-    shared_ptr<FontImpl> fontImpl = make_shared<FontImpl>();
-    if (FT_New_Memory_Face(ftContext.library, (FT_Byte const*)m_fontBuffer->ptr(), m_fontBuffer->size(), 0, &fontImpl->face))
-      throw FontException::format("Could not load font from buffer");
-
-    if (FT_Set_Pixel_Sizes(fontImpl->face, m_pixelSize, 0))
-      throw FontException::format("Cannot set font pixel size to: {}", m_pixelSize);
-
-    m_fontImpl = fontImpl;
+  if (!m_fontBuffer || m_fontBuffer->empty()) {
+#ifdef __EMSCRIPTEN__
+    Logger::warn("Font buffer is null or empty; skipping font load on web");
+    m_loadFailed = true;
+    return;
+#else
+    throw FontException("Font buffer is null or empty");
+#endif
   }
+
+  auto tryLoad = [&](ByteArrayConstPtr const& buffer) -> FontImplPtr {
+    auto fontImpl = make_shared<FontImpl>();
+    if (FT_New_Memory_Face(ftContext.library, (FT_Byte const*)buffer->ptr(), buffer->size(), 0, &fontImpl->face))
+      return nullptr;
+    if (FT_Set_Pixel_Sizes(fontImpl->face, m_pixelSize, 0))
+      return nullptr;
+    return fontImpl;
+  };
+
+  if (auto fontImpl = tryLoad(m_fontBuffer)) {
+    m_fontImpl = fontImpl;
+    return;
+  }
+
+#ifdef __EMSCRIPTEN__
+  static ByteArrayConstPtr fallbackBuffer;
+  if (!fallbackBuffer) {
+    try {
+      fallbackBuffer = make_shared<ByteArray>(File::readFile("/overrides/font/unifont.ttf"));
+    } catch (StarException const& e) {
+      Logger::warn("Failed to read fallback font /overrides/font/unifont.ttf: {}", e.what());
+    }
+  }
+
+  if (fallbackBuffer) {
+    if (auto fontImpl = tryLoad(fallbackBuffer)) {
+      Logger::warn("Font load failed; falling back to unifont.ttf on web");
+      m_fontImpl = fontImpl;
+      return;
+    }
+  }
+
+  Logger::warn("Font load failed; no usable fallback available on web");
+  m_loadFailed = true;
+  return;
+#else
+  throw FontException::format("Could not load font from buffer");
+#endif
 }
 
 tuple<Image, Vec2I, bool> Font::render(String::Char c) {
   loadFontImpl();
+  if (!m_fontImpl)
+    return {};
 
   FT_Face face = m_fontImpl->face;
   if (FT_Load_Glyph(face, FT_Get_Char_Index(face, c), FontLoadFlags) != 0)
@@ -164,6 +207,8 @@ tuple<Image, Vec2I, bool> Font::render(String::Char c) {
 
 bool Font::exists(String::Char c) {
   loadFontImpl();
+  if (!m_fontImpl)
+    return false;
   return FT_Get_Char_Index(m_fontImpl->face, c);
 }
 

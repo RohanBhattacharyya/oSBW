@@ -55,6 +55,14 @@ local textPositioning = { position = {0, 0}, horizontalAnchor = "left", vertical
 local hoveredSpeaker = nil
 local hoveredSpeakerIndex = 1
 local hoveredSpeakerPosition = {0, 0}
+
+local function voiceApiAvailable()
+	return type(voice) == "table" and type(voice.speakers) == "function"
+end
+
+local function voiceMuteApiAvailable()
+	return type(voice) == "table" and type(voice.speakerMuted) == "function" and type(voice.setSpeakerMuted) == "function"
+end
 local function mouseOverSpeaker(mouse, pos, expand)
 	expand = tonumber(expand) or 0
 	return (mouse[1] > pos[1] - expand and mouse[1] < pos[1] + 300 + expand)
@@ -86,7 +94,7 @@ local function drawSpeakerBar(mouse, pos, speaker, i)
 			canvas:drawText("^#fff7,font=iosevka-semibold;" .. tostring(speaker.speakerId), textPositioning, 16, nil, nil, nil, FONT_DIRECTIVES)
 		end
 
-		if input.mouseDown("MouseLeft") then
+		if input.mouseDown("MouseLeft") and voiceMuteApiAvailable() then
 			local muted = not voice.speakerMuted(speaker.speakerId)
 			interface.queueMessage((muted and "^#f43030;Muted^reset; " or "^#31d2f7;Unmuted^reset; ") .. speaker.name, 4, 0.5)
 			voice.setSpeakerMuted(speaker.speakerId, muted)
@@ -113,6 +121,10 @@ end
 
 local function drawIndicators()
 	canvas:clear()
+	if not voiceApiAvailable() then
+		-- Web builds currently don't provide the engine voice API; avoid throwing every frame.
+		return
+	end
 	local screenSize = canvas:size()
 	local mousePosition = canvas:mousePosition()
 	local basePos = {screenSize[1] - 350, 50}

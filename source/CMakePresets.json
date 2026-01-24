@@ -125,6 +125,36 @@
         "VCPKG_TARGET_TRIPLET": "arm64-osx-mixed",
         "CMAKE_LIBRARY_PATH": "${sourceParentDir}/lib/osx/arm64;${sourceParentDir}/lib/osx"
       }
+    },
+    {
+      "name": "emscripten-release",
+      "displayName": "Emscripten Web",
+      "generator": "Ninja",
+      "binaryDir": "${sourceParentDir}/build/emscripten-release",
+      "toolchainFile": "/usr/lib/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_MAKE_PROGRAM": "ninja",
+        "CMAKE_BUILD_TYPE": "Release",
+        "STAR_BUILD_GUI": true,
+        "STAR_ENABLE_STEAM_INTEGRATION": false,
+        "STAR_ENABLE_DISCORD_INTEGRATION": false,
+        "BUILD_TESTING": false
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Linux", "macOS", "Windows" ]
+        }
+      }
+    },
+    {
+      "inherits": "emscripten-release",
+      "name": "emscripten-pthreads-release",
+      "displayName": "Emscripten Web (PThreads)",
+      "binaryDir": "${sourceParentDir}/build/emscripten-pthreads-release",
+      "cacheVariables": {
+        "STAR_WEB_PTHREADS": true
+      }
     }
   ],
   "buildPresets": [
@@ -161,6 +191,14 @@
     {
       "name": "macos-arm-release",
       "configurePreset": "macos-arm-release"
+    },
+    {
+      "name": "emscripten-release",
+      "configurePreset": "emscripten-release"
+    },
+    {
+      "name": "emscripten-pthreads-release",
+      "configurePreset": "emscripten-pthreads-release"
     }
   ],
   "testPresets": [

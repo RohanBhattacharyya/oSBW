@@ -10,15 +10,21 @@
 #include "SDL3/SDL.h"
 #include "StarPlatformServices_pc.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #ifdef STAR_SYSTEM_WINDOWS
 #include <dwmapi.h>
 #include <objidl.h>
 #include <ShlObj_core.h>
 #endif
 
+#ifndef __EMSCRIPTEN__
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#endif
 
 namespace Star {
 
@@ -372,9 +378,14 @@ public:
 
     SDL_SetJoystickEventsEnabled(true);
 
+#ifdef __EMSCRIPTEN__
+    m_platformServices = nullptr;
+    Logger::info("Application: Platform services disabled for web build");
+#else
     m_platformServices = PcPlatformServices::create(applicationPath, platformArguments);
     if (!m_platformServices)
       Logger::info("Application: No platform services available");
+#endif
 
     Logger::info("Application: Creating SDL window");
     m_sdlWindow = SDL_CreateWindow(m_windowTitle.utf8Ptr(), m_windowSize[0], m_windowSize[1], SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -448,6 +459,13 @@ public:
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+#elif defined(__EMSCRIPTEN__)
+  // WebGL2 (GLES 3.0) + GLSL 300 ES
+  const char* glsl_version = "#version 300 es";
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
 #else
     // GL 3.0 + GLSL 130
     const char* glsl_version = "#version 130";
@@ -469,6 +487,18 @@ public:
     int height;
     SDL_GetWindowSize(m_sdlWindow, &width, &height);
     m_windowSize = Vec2U(width, height);
+
+  #ifdef __EMSCRIPTEN__
+    // On the web, mouse event coordinates are typically reported in CSS pixels (logical), while the
+    // GL drawable size can be devicePixelRatio-scaled. Track both and use the pixel size for
+    // rendering + input hit-testing.
+    m_windowLogicalSize = m_windowSize;
+    int pixelWidth = width;
+    int pixelHeight = height;
+    SDL_GetWindowSizeInPixels(m_sdlWindow, &pixelWidth, &pixelHeight);
+    m_windowPixelSize = Vec2U(pixelWidth, pixelHeight);
+    m_windowSize = m_windowPixelSize;
+  #endif
 
     SDL_GL_SwapWindow(m_sdlWindow);
     setVSyncEnabled(m_windowVSync);
@@ -499,6 +529,7 @@ public:
 
     m_cursorCache.setTimeToLive(30000);
 
+  #ifndef __EMSCRIPTEN__
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -511,6 +542,7 @@ public:
 
     ImGui_ImplSDL3_InitForOpenGL(m_sdlWindow, m_sdlGlContext);
     ImGui_ImplOpenGL3_Init(glsl_version);
+  #endif
 
   }
 
@@ -523,9 +555,11 @@ public:
 
     m_renderer.reset();
 
+  #ifndef __EMSCRIPTEN__
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+  #endif
 
     Logger::info("Application: Destroying SDL Window");
     SDL_GL_DestroyContext(m_sdlGlContext);
@@ -587,69 +621,107 @@ public:
       m_updateTicker.reset();
       m_renderTicker.reset();
 
-      bool quit = false;
+#ifdef __EMSCRIPTEN__
+      emscripten_set_main_loop_arg([](void* arg) {
+        static_cast<SdlPlatform*>(arg)->runFrameEmscripten();
+      }, this, 0, true);
+#else
       while (true) {
-        cleanup();
-
-
-        for (auto const& event : processEvents())
-          m_application->processInput(event);
-
-        if (m_platformServices)
-          m_platformServices->update();
-
-        if (m_cursorVisible || m_platformServices->overlayActive())
-          SDL_ShowCursor();
-        else
-          SDL_HideCursor();
-
-
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-
-        int updatesBehind = max<int>(round(m_updateTicker.ticksBehind()), 1);
-        updatesBehind = min<int>(updatesBehind, m_maxFrameSkip + 1);
-        for (int i = 0; i < updatesBehind; ++i) {
-          //since frame-skipping is a thing, we have to begin a new ImGui frame here to prevent duplicate elements made by updates
-          if (i != 0)
-            ImGui::EndFrame();
-          ImGui::NewFrame();
-          m_application->update();
-          m_updateRate = m_updateTicker.tick();
-        }
-
-        m_renderer->startFrame();
-        m_application->render();
-        m_renderer->finishFrame();
-
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        SDL_GL_SwapWindow(m_sdlWindow);
-        m_renderRate = m_renderTicker.tick();
-
-        if (m_quitRequested) {
-          Logger::info("Application: quit requested");
-          quit = true;
-        }
-
-        if (m_signalHandler.interruptCaught()) {
-          Logger::info("Application: Interrupt caught");
-          quit = true;
-        }
-
-        if (quit) {
-          Logger::info("Application: quitting...");
+        if (!runFrame())
           break;
-        }
 
         int64_t spareMilliseconds = round(m_updateTicker.spareTime() * 1000);
         if (spareMilliseconds > 0)
           Thread::sleepPrecise(spareMilliseconds);
       }
+
+      shutdown();
+#endif
     } catch (std::exception const& e) {
       Logger::error("Application: exception thrown!");
       fatalException(e, true);
     }
+  }
+
+private:
+#ifdef __EMSCRIPTEN__
+  void runFrameEmscripten() {
+    if (!runFrame()) {
+      emscripten_cancel_main_loop();
+      shutdown();
+    }
+  }
+#endif
+
+  bool runFrame() {
+    try {
+      cleanup();
+
+      for (auto const& event : processEvents())
+        m_application->processInput(event);
+
+      if (m_platformServices)
+        m_platformServices->update();
+
+      bool overlayActive = m_platformServices ? m_platformServices->overlayActive() : false;
+      if (m_cursorVisible || overlayActive)
+        SDL_ShowCursor();
+      else
+        SDL_HideCursor();
+
+    #ifndef __EMSCRIPTEN__
+      ImGui_ImplOpenGL3_NewFrame();
+      ImGui_ImplSDL3_NewFrame();
+    #endif
+
+      int updatesBehind = max<int>(round(m_updateTicker.ticksBehind()), 1);
+      updatesBehind = min<int>(updatesBehind, m_maxFrameSkip + 1);
+      for (int i = 0; i < updatesBehind; ++i) {
+        //since frame-skipping is a thing, we have to begin a new ImGui frame here to prevent duplicate elements made by updates
+#ifndef __EMSCRIPTEN__
+        if (i != 0)
+          ImGui::EndFrame();
+        ImGui::NewFrame();
+#endif
+        m_application->update();
+        m_updateRate = m_updateTicker.tick();
+      }
+
+      m_renderer->startFrame();
+      m_application->render();
+      m_renderer->finishFrame();
+
+    #ifndef __EMSCRIPTEN__
+      ImGui::Render();
+      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    #endif
+      SDL_GL_SwapWindow(m_sdlWindow);
+      m_renderRate = m_renderTicker.tick();
+
+      if (m_quitRequested) {
+        Logger::info("Application: quit requested");
+        Logger::info("Application: quitting...");
+        return false;
+      }
+
+      if (m_signalHandler.interruptCaught()) {
+        Logger::info("Application: Interrupt caught");
+        Logger::info("Application: quitting...");
+        return false;
+      }
+
+      return true;
+    } catch (std::exception const& e) {
+      Logger::error("Application: exception thrown!");
+      fatalException(e, true);
+      return false;
+    }
+  }
+
+  void shutdown() {
+    if (m_shutdownComplete)
+      return;
+    m_shutdownComplete = true;
 
     try {
       Logger::info("Application: shutdown...");
@@ -666,8 +738,6 @@ public:
 
     m_application.reset();
   }
-
-private:
   struct Controller : public ApplicationController {
     Controller(SdlPlatform* parent)
       : parent(parent) {}
@@ -927,11 +997,46 @@ private:
   List<InputEvent> processEvents() {
     List<InputEvent> inputEvents;
 
+#ifndef __EMSCRIPTEN__
     ImGuiIO& io = ImGui::GetIO();
+    bool wantCaptureKeyboard = io.WantCaptureKeyboard;
+    bool wantTextInput = io.WantTextInput;
+    bool wantCaptureMouse = io.WantCaptureMouse;
+#else
+    bool wantCaptureKeyboard = false;
+    bool wantTextInput = false;
+    bool wantCaptureMouse = false;
+#endif
     SDL_Event event;
+
+#ifdef __EMSCRIPTEN__
+    // Emscripten/SDL doesn't always emit window resize events when the canvas backing store changes.
+    // Poll window logical/pixel sizes and update our cached render size proactively.
+    {
+      int logicalW = 0;
+      int logicalH = 0;
+      int pixelW = 0;
+      int pixelH = 0;
+      SDL_GetWindowSize(m_sdlWindow, &logicalW, &logicalH);
+      SDL_GetWindowSizeInPixels(m_sdlWindow, &pixelW, &pixelH);
+      Vec2U newLogicalSize((unsigned)logicalW, (unsigned)logicalH);
+      Vec2U newPixelSize((unsigned)pixelW, (unsigned)pixelH);
+      if (newLogicalSize != m_windowLogicalSize || newPixelSize != m_windowPixelSize) {
+        m_windowLogicalSize = newLogicalSize;
+        m_windowPixelSize = newPixelSize;
+        m_windowSize = m_windowPixelSize;
+        m_renderer->setScreenSize(m_windowSize);
+        m_application->windowChanged(m_windowMode, m_windowSize);
+      }
+    }
+#endif
+
     while (SDL_PollEvent(&event)) {
-      SDL_ConvertEventToRenderCoordinates(SDL_GetRenderer(m_sdlWindow), &event);
+      if (auto renderer = SDL_GetRenderer(m_sdlWindow))
+        SDL_ConvertEventToRenderCoordinates(renderer, &event);
+#ifndef __EMSCRIPTEN__
       ImGui_ImplSDL3_ProcessEvent(&event);
+#endif
       Maybe<InputEvent> starEvent;
       if (event.type == SDL_EVENT_WINDOW_MAXIMIZED || event.type == SDL_EVENT_WINDOW_RESTORED) {
         auto windowFlags = SDL_GetWindowFlags(m_sdlWindow);
@@ -946,12 +1051,24 @@ private:
           m_windowMode = WindowMode::Normal;
 
         m_application->windowChanged(m_windowMode, m_windowSize);
-      } else if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            } else if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+      #ifdef __EMSCRIPTEN__
+        int logicalW = 0;
+        int logicalH = 0;
+        int pixelW = 0;
+        int pixelH = 0;
+        SDL_GetWindowSize(m_sdlWindow, &logicalW, &logicalH);
+        SDL_GetWindowSizeInPixels(m_sdlWindow, &pixelW, &pixelH);
+        m_windowLogicalSize = Vec2U((unsigned)logicalW, (unsigned)logicalH);
+        m_windowPixelSize = Vec2U((unsigned)pixelW, (unsigned)pixelH);
+        m_windowSize = m_windowPixelSize;
+      #else
         m_windowSize = Vec2U(event.window.data1, event.window.data2);
+      #endif
         m_renderer->setScreenSize(m_windowSize);
         m_application->windowChanged(m_windowMode, m_windowSize);
-      }
-      else if (event.type == SDL_EVENT_KEY_DOWN && (!io.WantCaptureKeyboard || !io.WantTextInput)) {
+            }
+      else if (event.type == SDL_EVENT_KEY_DOWN && (!wantCaptureKeyboard || !wantTextInput)) {
         if (!event.key.repeat) {
           if (auto key = keyFromSdlKeyCode(event.key.key))
             starEvent.set(KeyDownEvent{*key, keyModsFromSdlKeyMods(event.key.mod)});
@@ -959,20 +1076,91 @@ private:
       } else if (event.type == SDL_EVENT_KEY_UP) {
         if (auto key = keyFromSdlKeyCode(event.key.key))
           starEvent.set(KeyUpEvent{*key});
-      } else if (event.type == SDL_EVENT_TEXT_INPUT && !io.WantTextInput) {
+      } else if (event.type == SDL_EVENT_TEXT_INPUT && !wantTextInput) {
         starEvent.set(TextInputEvent{String(event.text.text)});
       } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
+#ifdef __EMSCRIPTEN__
+        auto logicalW = std::max(1u, m_windowLogicalSize[0]);
+        auto logicalH = std::max(1u, m_windowLogicalSize[1]);
+        auto pixelW = std::max(1u, m_windowPixelSize[0]);
+        auto pixelH = std::max(1u, m_windowPixelSize[1]);
+        double scaleX = (double)pixelW / (double)logicalW;
+        double scaleY = (double)pixelH / (double)logicalH;
+        double x = event.motion.x;
+        double y = event.motion.y;
+        double xrel = event.motion.xrel;
+        double yrel = event.motion.yrel;
+
+        // Heuristic: if SDL already provided pixel coordinates, don't rescale.
+        if (x <= (double)logicalW + 1.0 && y <= (double)logicalH + 1.0) {
+          x *= scaleX;
+          y *= scaleY;
+          xrel *= scaleX;
+          yrel *= scaleY;
+        }
+
+        starEvent.set(MouseMoveEvent{{(float)xrel, (float)-yrel}, {(float)x, (float)pixelH - (float)y}});
+#else
         starEvent.set(MouseMoveEvent{
             {event.motion.xrel, -event.motion.yrel}, {event.motion.x, (int)m_windowSize[1] - event.motion.y}});
-      } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && !io.WantCaptureMouse) {
+#endif
+      } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && !wantCaptureMouse) {
+#ifdef __EMSCRIPTEN__
+        auto logicalW = std::max(1u, m_windowLogicalSize[0]);
+        auto logicalH = std::max(1u, m_windowLogicalSize[1]);
+        auto pixelW = std::max(1u, m_windowPixelSize[0]);
+        auto pixelH = std::max(1u, m_windowPixelSize[1]);
+        double scaleX = (double)pixelW / (double)logicalW;
+        double scaleY = (double)pixelH / (double)logicalH;
+        double x = event.button.x;
+        double y = event.button.y;
+        if (x <= (double)logicalW + 1.0 && y <= (double)logicalH + 1.0) {
+          x *= scaleX;
+          y *= scaleY;
+        }
+        starEvent.set(MouseButtonDownEvent{mouseButtonFromSdlMouseButton(event.button.button), {(float)x, (float)pixelH - (float)y}});
+#else
         starEvent.set(MouseButtonDownEvent{mouseButtonFromSdlMouseButton(event.button.button),
             {event.button.x, (int)m_windowSize[1] - event.button.y}});
-      } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && !io.WantCaptureMouse) {
+#endif
+      } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && !wantCaptureMouse) {
+#ifdef __EMSCRIPTEN__
+        auto logicalW = std::max(1u, m_windowLogicalSize[0]);
+        auto logicalH = std::max(1u, m_windowLogicalSize[1]);
+        auto pixelW = std::max(1u, m_windowPixelSize[0]);
+        auto pixelH = std::max(1u, m_windowPixelSize[1]);
+        double scaleX = (double)pixelW / (double)logicalW;
+        double scaleY = (double)pixelH / (double)logicalH;
+        double x = event.button.x;
+        double y = event.button.y;
+        if (x <= (double)logicalW + 1.0 && y <= (double)logicalH + 1.0) {
+          x *= scaleX;
+          y *= scaleY;
+        }
+        starEvent.set(MouseButtonUpEvent{mouseButtonFromSdlMouseButton(event.button.button), {(float)x, (float)pixelH - (float)y}});
+#else
         starEvent.set(MouseButtonUpEvent{mouseButtonFromSdlMouseButton(event.button.button),
             {event.button.x, (int)m_windowSize[1] - event.button.y}});
-      } else if (event.type == SDL_EVENT_MOUSE_WHEEL && !io.WantCaptureMouse) {
+#endif
+      } else if (event.type == SDL_EVENT_MOUSE_WHEEL && !wantCaptureMouse) {
+#ifdef __EMSCRIPTEN__
+        auto logicalW = std::max(1u, m_windowLogicalSize[0]);
+        auto logicalH = std::max(1u, m_windowLogicalSize[1]);
+        auto pixelW = std::max(1u, m_windowPixelSize[0]);
+        auto pixelH = std::max(1u, m_windowPixelSize[1]);
+        double scaleX = (double)pixelW / (double)logicalW;
+        double scaleY = (double)pixelH / (double)logicalH;
+        double x = event.wheel.mouse_x;
+        double y = event.wheel.mouse_y;
+        if (x <= (double)logicalW + 1.0 && y <= (double)logicalH + 1.0) {
+          x *= scaleX;
+          y *= scaleY;
+        }
+        starEvent.set(MouseWheelEvent{event.wheel.y < 0 ? MouseWheel::Down : MouseWheel::Up, {(float)x, (float)pixelH - (float)y}});
+#else
         starEvent.set(MouseWheelEvent{event.wheel.y < 0 ? MouseWheel::Down : MouseWheel::Up,
           {event.wheel.mouse_x, (int)m_windowSize[1] - event.wheel.mouse_y}});
+#endif
       } else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
         starEvent.set(ControllerAxisEvent{
           (ControllerId)event.gaxis.which,
@@ -1181,6 +1369,10 @@ private:
   CursorDescriptor m_currentCursor;
 
   Vec2U m_windowSize = {800, 600};
+#ifdef __EMSCRIPTEN__
+  Vec2U m_windowLogicalSize = {800, 600};
+  Vec2U m_windowPixelSize = {800, 600};
+#endif
   WindowMode m_windowMode = WindowMode::Normal;
 
   String m_windowTitle = "Starbound";
@@ -1191,6 +1383,7 @@ private:
   bool m_acceptingTextInput = false;
   bool m_audioEnabled = false;
   bool m_quitRequested = false;
+  bool m_shutdownComplete = false;
 
   OpenGlRendererPtr m_renderer;
   ApplicationUPtr m_application;

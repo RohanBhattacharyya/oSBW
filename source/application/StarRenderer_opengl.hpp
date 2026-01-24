@@ -3,7 +3,11 @@
 #include "StarTextureAtlas.hpp"
 #include "StarRenderer.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#else
 #include "GL/glew.h"
+#endif
 
 namespace Star {
 

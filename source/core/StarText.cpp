@@ -1,6 +1,10 @@
 #include "StarText.hpp"
 #include "StarJsonExtra.hpp"
+#ifdef __EMSCRIPTEN__
+#include <regex>
+#else
 #include <re2/re2.h>
+#endif
 
 namespace Star {
 
@@ -34,6 +38,21 @@ namespace Text {
   std::string const AllEsc = strf("{:c}{:c}", CmdEsc, StartEsc);
   std::string const AllEscEnd = strf("{:c}{:c}{:c}", CmdEsc, StartEsc, EndEsc);
 
+#ifdef __EMSCRIPTEN__
+  static std::regex stripEscapeRegex;
+  static bool stripEscapeRegexInit = false;
+  String stripEscapeCodes(String const& s) {
+    if (s.empty())
+      return s;
+    if (!stripEscapeRegexInit) {
+      stripEscapeRegex = std::regex(strf("\\{:c}[^;]*{:c}", CmdEsc, EndEsc));
+      stripEscapeRegexInit = true;
+    }
+    std::string result = s.utf8();
+    result = std::regex_replace(result, stripEscapeRegex, "");
+    return String(std::move(result));
+  }
+#else
   static RE2 stripEscapeRegex = strf("\\{:c}[^;]*{:c}", CmdEsc, EndEsc);
   String stripEscapeCodes(String const& s) {
     if (s.empty())
@@ -42,6 +61,7 @@ namespace Text {
     RE2::GlobalReplace(&result, stripEscapeRegex, "");
     return String(std::move(result));
   }
+#endif
 
   bool processText(StringView text, TextCallback textFunc, CommandsCallback commandsFunc, bool includeCommandSides) {
     std::string_view str = text.utf8();

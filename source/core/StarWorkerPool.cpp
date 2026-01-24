@@ -63,6 +63,11 @@ void WorkerPool::start(unsigned threadCount) {
   m_workCondition.broadcast();
   m_workerThreads.clear();
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  (void)threadCount;
+  return;
+#endif
+
   for (size_t i = m_workerThreads.size(); i < threadCount; ++i)
     m_workerThreads.append(make_unique<WorkerThread>(this));
 }
@@ -158,6 +163,10 @@ void WorkerPool::WorkerThread::run() {
 }
 
 void WorkerPool::queueWork(function<void()> work) {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  work();
+  return;
+#endif
   MutexLocker workLock(m_workMutex);
   m_pendingWork.append(std::move(work));
   m_workCondition.signal();

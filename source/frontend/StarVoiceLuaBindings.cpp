@@ -2,6 +2,17 @@
 #include "StarVoiceLuaBindings.hpp"
 #include "StarVoice.hpp"
 
+#ifdef __EMSCRIPTEN__
+
+namespace Star {
+
+LuaCallbacks LuaBindings::makeVoiceCallbacks() {
+  return {};
+}
+
+}
+
+#else
 
 namespace Star {
 
@@ -43,3 +54,5 @@ LuaCallbacks LuaBindings::makeVoiceCallbacks() {
 }
 
 }
+
+#endif

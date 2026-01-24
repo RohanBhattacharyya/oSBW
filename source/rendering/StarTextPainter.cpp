@@ -320,14 +320,25 @@ void TextPainter::reloadFonts() {
   auto assets = Root::singleton().assets();
   auto loadFontsByExtension = [&](String const& ext) {
     for (auto& fontPath : assets->scanExtension(ext)) {
-      auto font = assets->font(fontPath);
-      auto name = AssetPath::filename(fontPath);
-      name = name.substr(0, name.findLast("."));
-      addFont(loadFont(fontPath, name), name);
+      try {
+        auto font = assets->font(fontPath);
+        auto name = AssetPath::filename(fontPath);
+        name = name.substr(0, name.findLast("."));
+        addFont(loadFont(fontPath, name), name);
+      } catch (StarException const& e) {
+        Logger::warn("Skipping font '{}' ({}): {}", fontPath, ext, e.what());
+      }
     }
   };
+#ifdef __EMSCRIPTEN__
+  // Prefer TTF on web builds: FreeType in Emscripten may not support WOFF2.
+  // We still *try* to load WOFF2, but ignore failures so the game doesn't crash.
   loadFontsByExtension("ttf");
   loadFontsByExtension("woff2");
+#else
+  loadFontsByExtension("ttf");
+  loadFontsByExtension("woff2");
+#endif
   m_fontTextureGroup.setFixedFonts(
     assets->json("/interface.config:font.defaultFont").toString(),
     assets->json("/interface.config:font.fallbackFont").toString(),

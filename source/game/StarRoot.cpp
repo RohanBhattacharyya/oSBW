@@ -96,8 +96,10 @@ Root::Root(Settings settings) : RootBase() {
 
   Logger::info("Root: Preparing...");
 
+  Logger::info("Root: Starting maintenance thread...");
   m_stopMaintenanceThread = false;
   m_maintenanceThread = Thread::invoke("Root::maintenanceMain", [this]() {
+      Logger::info("Root: Maintenance thread running");
       MutexLocker locker(m_maintenanceStopMutex);
       while (!m_stopMaintenanceThread) {
         m_reloadListeners.clearExpiredListeners();
@@ -155,6 +157,7 @@ Root::Root(Settings settings) : RootBase() {
         m_maintenanceStopCondition.wait(m_maintenanceStopMutex, RootMaintenanceSleep);
       }
     });
+  Logger::info("Root: Maintenance thread started");
 
   Logger::info("Root: Done preparing Root.");
 }
@@ -315,53 +318,64 @@ void Root::loadMods(StringList modDirectories, bool _reload) {
 }
 
 void Root::fullyLoad() {
+  Logger::info("Root: fullyLoad starting");
   auto workerPool = WorkerPool("Root::fullyLoad", RootLoadThreads);
   List<WorkerPoolHandle> loaders;
 
   loaders.reserve(40);
 
-  loaders.append(workerPool.addWork(swallow(bind(&Root::assets, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::configuration, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::codexDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::behaviorDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::techDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::aiDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::questTemplateDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::emoteProcessor, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::terrainDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::particleDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::versioningDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::functionDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::imageMetadataDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::tenantDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::nameGenerator, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::danceDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::spawnTypeDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::radioMessageDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::collectionDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::statisticsDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::speciesDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::projectileDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::stagehandDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::damageDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::effectSourceDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::statusEffectDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::treasureDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::materialDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::objectDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::npcDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::plantDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::itemDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::monsterDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::vehicleDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::playerFactory, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::entityFactory, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::biomeDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::liquidsDatabase, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::dungeonDefinitions, this))));
-  loaders.append(workerPool.addWork(swallow(bind(&Root::tilesetDatabase, this))));
+  auto addLoader = [&](char const* name, function<void()> fn) {
+    Logger::info("Root: Queue load {}", name);
+    loaders.append(workerPool.addWork(swallow([=]() {
+      Logger::info("Root: Begin load {}", name);
+      fn();
+      Logger::info("Root: End load {}", name);
+    })));
+  };
+
+  addLoader("Assets", [this]() { assets(); });
+  addLoader("Configuration", [this]() { configuration(); });
+  addLoader("CodexDatabase", [this]() { codexDatabase(); });
+  addLoader("BehaviorDatabase", [this]() { behaviorDatabase(); });
+  addLoader("TechDatabase", [this]() { techDatabase(); });
+  addLoader("AiDatabase", [this]() { aiDatabase(); });
+  addLoader("QuestTemplateDatabase", [this]() { questTemplateDatabase(); });
+  addLoader("EmoteProcessor", [this]() { emoteProcessor(); });
+  addLoader("TerrainDatabase", [this]() { terrainDatabase(); });
+  addLoader("ParticleDatabase", [this]() { particleDatabase(); });
+  addLoader("VersioningDatabase", [this]() { versioningDatabase(); });
+  addLoader("FunctionDatabase", [this]() { functionDatabase(); });
+  addLoader("ImageMetadataDatabase", [this]() { imageMetadataDatabase(); });
+  addLoader("TenantDatabase", [this]() { tenantDatabase(); });
+  addLoader("NameGenerator", [this]() { nameGenerator(); });
+  addLoader("DanceDatabase", [this]() { danceDatabase(); });
+  addLoader("SpawnTypeDatabase", [this]() { spawnTypeDatabase(); });
+  addLoader("RadioMessageDatabase", [this]() { radioMessageDatabase(); });
+  addLoader("CollectionDatabase", [this]() { collectionDatabase(); });
+  addLoader("StatisticsDatabase", [this]() { statisticsDatabase(); });
+  addLoader("SpeciesDatabase", [this]() { speciesDatabase(); });
+  addLoader("ProjectileDatabase", [this]() { projectileDatabase(); });
+  addLoader("StagehandDatabase", [this]() { stagehandDatabase(); });
+  addLoader("DamageDatabase", [this]() { damageDatabase(); });
+  addLoader("EffectSourceDatabase", [this]() { effectSourceDatabase(); });
+  addLoader("StatusEffectDatabase", [this]() { statusEffectDatabase(); });
+  addLoader("TreasureDatabase", [this]() { treasureDatabase(); });
+  addLoader("MaterialDatabase", [this]() { materialDatabase(); });
+  addLoader("ObjectDatabase", [this]() { objectDatabase(); });
+  addLoader("NpcDatabase", [this]() { npcDatabase(); });
+  addLoader("PlantDatabase", [this]() { plantDatabase(); });
+  addLoader("ItemDatabase", [this]() { itemDatabase(); });
+  addLoader("MonsterDatabase", [this]() { monsterDatabase(); });
+  addLoader("VehicleDatabase", [this]() { vehicleDatabase(); });
+  addLoader("PlayerFactory", [this]() { playerFactory(); });
+  addLoader("EntityFactory", [this]() { entityFactory(); });
+  addLoader("BiomeDatabase", [this]() { biomeDatabase(); });
+  addLoader("LiquidsDatabase", [this]() { liquidsDatabase(); });
+  addLoader("DungeonDefinitions", [this]() { dungeonDefinitions(); });
+  addLoader("TilesetDatabase", [this]() { tilesetDatabase(); });
 
   auto startSeconds = Time::monotonicTime();
+  Logger::info("Root: fullyLoad waiting for {} loaders", loaders.size());
   for (auto& loader : loaders)
     loader.finish();
   Logger::info("Root: Loaded everything in {} seconds", Time::monotonicTime() - startSeconds);
@@ -390,7 +404,9 @@ AssetsConstPtr Root::assets() {
   return loadMemberFunction<Assets>(m_assets, m_assetsMutex, "Assets", [this]() {
       StringList assetDirectories = m_settings.assetDirectories;
       assetDirectories.appendAll(m_modDirectories);
+      Logger::info("Root: Scanning asset sources...");
       StringList assetSources = scanForAssetSources(assetDirectories, m_settings.assetSources);
+      Logger::info("Root: Found {} asset sources", assetSources.size());
 
       auto assets = make_shared<Assets>(m_settings.assetsSettings, assetSources);
       Logger::info("Assets digest is {}", hexEncode(assets->digest()));
@@ -761,6 +777,7 @@ template <typename T>
 shared_ptr<T> Root::loadMemberFunction(shared_ptr<T>& ptr, Mutex& mutex, char const* name, function<shared_ptr<T>()> loadFunction) {
   MutexLocker locker(mutex);
   if (!ptr) {
+    Logger::info("Root: Loading {}...", name);
     auto startSeconds = Time::monotonicTime();
     ptr = loadFunction();
     Logger::info("Root: Loaded {} in {} seconds", name, Time::monotonicTime() - startSeconds);

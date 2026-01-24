@@ -2,7 +2,9 @@
 #include "StarLogging.hpp"
 #include "StarFormat.hpp"
 #include "StarWorkerPool.hpp"
+#ifndef __EMSCRIPTEN__
 #include <cpr/cpr.h>
+#endif
 
 namespace Star {
 
@@ -18,6 +20,11 @@ HttpClient::~HttpClient() = default;
 static HttpResponse performRequest(HttpRequest const& req) {
   HttpResponse response;
 
+#ifdef __EMSCRIPTEN__
+  _unused(req);
+  response.error = "HTTP requests are not supported in web builds";
+  return response;
+#else
   try {
     // CPR has in own header object
     cpr::Header cprHeaders;
@@ -84,6 +91,7 @@ static HttpResponse performRequest(HttpRequest const& req) {
   }
 
   return response;
+#endif
 }
 
 WorkerPoolPromise<HttpResponse> HttpClient::requestAsync(HttpRequest const& request) {
