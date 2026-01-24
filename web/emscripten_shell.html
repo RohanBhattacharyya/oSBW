@@ -459,6 +459,12 @@
       noInitialRun: true,
       print: (...args) => console.log(...args),
       printErr: (...args) => console.error(...args),
+      locateFile: (path, scriptDirectory) => {
+        const basename = path.replace(/.*\//, '');
+        if (scriptDirectory)
+          return scriptDirectory + basename;
+        return basename;
+      },
       canvas: (() => document.getElementById('canvas'))(),
       onAbort: (reason) => {
         console.error('[Web] Abort:', reason);

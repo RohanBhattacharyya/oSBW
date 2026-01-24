@@ -108,4 +108,9 @@ IF(EMSCRIPTEN)
       ${PROJECT_SOURCE_DIR}/../assets/opensb/preload.config
       $<TARGET_FILE_DIR:starbound>/preload.config
     COMMENT "Copy preload.config into web output")
+
+  add_custom_command(TARGET starbound POST_BUILD
+    COMMAND ${PYTHON3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/../web/patch_emscripten_package_name.py"
+      --js "$<TARGET_FILE_DIR:starbound>/starbound.js"
+    COMMENT "Patch starbound.js PACKAGE_NAME to be relative")
 ENDIF()
