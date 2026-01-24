@@ -8,6 +8,7 @@
 #include "StarJsonBuilder.hpp"
 #include "StarJsonExtra.hpp"
 #include "StarJsonPatch.hpp"
+#include "StarJsonPath.hpp"
 #include "StarIterator.hpp"
 #include "StarImageProcessing.hpp"
 #include "StarLogging.hpp"
@@ -368,6 +369,14 @@ Assets::Assets(Settings settings, StringList assetSources) {
     // clear any caching that may have been trigered by load scripts as they may no longer be valid
     m_framesSpecifications.clear();
     m_assetsCache.clear();
+  #ifdef EMSCRIPTEN
+    // In web builds, filesystem-backed asset sources (e.g. IDBFS-mounted /mods)
+    // can proxy file operations through the main thread. Leaving a pending
+    // background load queue after scripts run can cause worker threads to start
+    // loading assets immediately before preload, increasing the chance of a
+    // deadlock if the main thread blocks waiting for workers.
+    m_queue.clear();
+  #endif
   };
 
   List<pair<String, AssetSourcePtr>> sources;
@@ -388,6 +397,14 @@ Assets::Assets(Settings settings, StringList assetSources) {
 
   for (auto& pair : sources)
     runLoadScripts("postLoad", pair.first, pair.second);
+
+  // Some mods patch /player.config genericScriptContexts during postLoad.
+  // Ensure our required script context exists after all postLoad scripts run.
+  if (auto playerConfig = m_files.ptr("/player.config")) {
+    String ensurePatchPath = "/scripts/opensb/assets/ensure_ib_itemblacklist.patch.lua";
+    if (auto ensurePatch = m_files.ptr(ensurePatchPath))
+      playerConfig->patchSources.append({ensurePatchPath, ensurePatch->source});
+  }
 
   Sha256Hasher digest;
 
@@ -415,22 +432,41 @@ Assets::Assets(Settings settings, StringList assetSources) {
   m_digest = digest.compute();
 
   int workerPoolSize = m_settings.workerPoolSize;
+#ifdef EMSCRIPTEN
+  // On the web, asset loads may involve JS-backed filesystem mounts (IDBFS).
+  // Those operations can require proxying to the main thread; if the main
+  // thread blocks waiting on a worker, it can deadlock. Avoid this by doing
+  // asset loads synchronously on the calling thread.
+  workerPoolSize = 0;
+  Logger::info("Assets: Forcing workerPoolSize=0 on Emscripten to avoid main-thread blocking deadlocks");
+#endif
   for (int i = 0; i < workerPoolSize; i++)
     m_workerThreads.append(Thread::invoke("Assets::workerMain", mem_fn(&Assets::workerMain), this));
 
   // preload.config contains an array of files which will be loaded and then told to persist
-  Json preload = json("/preload.config");
   Logger::info("Preloading assets");
+  double preloadStart = Time::monotonicTime();
+  Json preload = json("/preload.config");
+  size_t preloadCount = preload.isType(Json::Type::Array) ? preload.size() : 0;
+  Logger::info("Preloading assets list has {} entries", preloadCount);
+
+  size_t preloadIndex = 0;
   for (auto script : preload.iterateArray()) {
+    preloadIndex++;
     auto type = AssetTypeNames.getLeft(script.getString("type"));
     auto path = script.getString("path");
+    Logger::info("Preloading asset {}/{}: {} ({})", preloadIndex, preloadCount, path, AssetTypeNames.getRight(type));
+    double oneStart = Time::monotonicTime();
+
     auto components = AssetPath::split(path);
     validatePath(components, type == AssetType::Json || type == AssetType::Image, type == AssetType::Image);
 
     auto asset = getAsset(AssetId{type, std::move(components)});
     // make this asset never unload
     asset->forcePersist = true;
+    Logger::info("Preloaded asset {}/{} in {}s", preloadIndex, preloadCount, Time::monotonicTime() - oneStart);
   }
+  Logger::info("Finished preloading assets in {}s", Time::monotonicTime() - preloadStart);
 }
 
 Assets::~Assets() {
@@ -859,6 +895,10 @@ shared_ptr<Assets::AssetData> Assets::tryAsset(AssetId const& id) const {
 shared_ptr<Assets::AssetData> Assets::getAsset(AssetId const& id) const {
   MutexLocker assetsLocker(m_assetsMutex);
 
+  // Helps debug web builds where blocking waits on the main thread can appear as a hang.
+  // Rate-limit to avoid log spam.
+  static thread_local double lastWaitLog = 0.0;
+
   while (true) {
     auto j = m_assetsCache.find(id);
     if (j != m_assetsCache.end()) {
@@ -872,8 +912,14 @@ shared_ptr<Assets::AssetData> Assets::getAsset(AssetId const& id) const {
     } else {
       // Try to load the asset in-thread, if we cannot, then the asset has been
       // queued so wait for a worker thread to finish it.
-      if (!doLoad(id))
+      if (!doLoad(id)) {
+        double now = Time::monotonicTime();
+        if (now - lastWaitLog > 1.0) {
+          lastWaitLog = now;
+          Logger::warn("Assets: Waiting on asset load {} (this may look like a hang on the web)", id.path);
+        }
         m_assetsDone.wait(m_assetsMutex);
+      }
     }
   }
 }
@@ -1072,7 +1118,11 @@ Json Assets::checkPatchArray(String const& path, AssetSourcePtr const& source, J
     switch(patch.type()) {
       case Json::Type::Array: // if the patch is an array, go down recursively until we get objects
         try {
-          newResult = checkPatchArray(path, source, newResult, patch.toArray(), externalRef);
+          auto patchResult = checkPatchArray(path, source, newResult, patch.toArray(), externalRef);
+          // Check for test failure sentinel (null when input wasn't null)
+          if (!patchResult.isNull() || newResult.isNull())
+            newResult = patchResult;
+          // else: test failed, keep current result
         } catch (JsonPatchTestFail const& e) {
           Logger::debug("Patch test failure from file {} in source: '{}' at '{}'. Caused by: {}", path, source->metadata().value("name", ""), m_assetSourcePaths.getLeft(source), e.what());
         } catch (JsonPatchException const& e) {
@@ -1080,17 +1130,27 @@ Json Assets::checkPatchArray(String const& path, AssetSourcePtr const& source, J
         }
         break;
       case Json::Type::Object: // if its an object, check for operations, or for if an external file is needed for patches to reference
-        newResult = JsonPatching::applyOperation(newResult, patch, externalRef);
+        try {
+          auto patchResult = JsonPatching::applyOperation(newResult, patch, externalRef);
+          // Check for test failure sentinel (null when input wasn't null)
+          if (!patchResult.isNull() || newResult.isNull())
+            newResult = patchResult;
+          // else: test failed, keep current result
+        } catch (JsonPatchTestFail const& e) {
+          Logger::debug("Patch test failure from file {} in source: '{}' at '{}'. Caused by: {}", path, source->metadata().value("name", ""), m_assetSourcePaths.getLeft(source), e.what());
+        } catch (JsonPatchException const& e) {
+          Logger::error("Could not apply patch from file {} in source: '{}' at '{}'.  Caused by: {}", path, source->metadata().value("name", ""), m_assetSourcePaths.getLeft(source), e.what());
+        }
         break;
       case Json::Type::String:
         try {
           externalRef = json(patch.toString());
         } catch (...) {
-          throw JsonPatchTestFail(strf("Unable to load reference asset: {}", patch.toString()));
+          Logger::error("Unable to load reference asset: {}", patch.toString());
         }
         break;
       default:
-        throw JsonPatchException(strf("Patch data is wrong type: {}", Json::typeName(patch.type())));
+        Logger::error("Patch data is wrong type: {}", Json::typeName(patch.type()));
         break;
     }
   }
@@ -1100,7 +1160,33 @@ Json Assets::checkPatchArray(String const& path, AssetSourcePtr const& source, J
 Json Assets::readJson(String const& path) const {
   ByteArray streamData = read(path);
   try {
-    return applyJsonPatches(inputUtf8Json(streamData.begin(), streamData.end(), JsonParseType::Top), path, m_files.get(path).patchSources);
+    Json baseJson = inputUtf8Json(streamData.begin(), streamData.end(), JsonParseType::Top);
+
+    // Note: Previously we pre-injected ib_itemblacklist BEFORE patches, but this
+    // caused mod patches with "test inverse:true" to fail. The tryGet() fix in
+    // StarJsonPatch.cpp now handles missing paths gracefully without throwing.
+
+    Json result = applyJsonPatches(baseJson, path, m_files.get(path).patchSources);
+
+#ifdef EMSCRIPTEN
+    // Web builds load mods via JS-backed filesystems (e.g. IDBFS) and we also
+    // support user-provided mod packs. Some mods (or patch ordering) can result
+    // in /player.config missing expected OpenSB script contexts at runtime.
+    // Ensure this key exists after all patches are applied so gameplay code
+    // doesn't crash during early startup.
+    if (path == "/player.config") {
+      if (result.isType(Json::Type::Object)) {
+        auto cfg = result.toObject();
+        auto contexts = cfg.value("genericScriptContexts", JsonObject()).optObject().value(JsonObject());
+        if (!contexts.contains("ib_itemblacklist"))
+          contexts["ib_itemblacklist"] = "/scripts/opensb/util/empty.lua";
+        cfg["genericScriptContexts"] = std::move(contexts);
+        result = std::move(cfg);
+      }
+    }
+#endif
+
+    return result;
   } catch (std::exception const& e) {
     throw JsonParsingException(strf("Cannot parse json file: {}", path), e);
   }
@@ -1122,9 +1208,15 @@ Json Assets::applyJsonPatches(Json const& input, String const& path, List<pair<S
         context = make_shared<LuaContext>(as<LuaEngine>(m_luaEngine.get())->createContext());
         context->load(patchStream, patchBasePath);
       }
-      auto newResult = context->invokePath<Json>("patch", result, path);
-      if (newResult)
-        result = std::move(newResult);
+      try {
+        auto newResult = context->invokePath<Json>("patch", result, path);
+        if (newResult)
+          result = std::move(newResult);
+      } catch (JsonPath::TraversalException const& e) {
+        Logger::debug("Lua patch path traversal failure from file {} in source: '{}' at '{}'. Caused by: {}", pair.first, patchSource->metadata().value("name", ""), m_assetSourcePaths.getLeft(patchSource), e.what());
+      } catch (StarException const& e) {
+        Logger::error("Could not apply Lua patch from file {} in source: '{}' at '{}'. Caused by: {}", pair.first, patchSource->metadata().value("name", ""), m_assetSourcePaths.getLeft(patchSource), e.what());
+      }
     } else {
       try {
         auto patchJson = inputUtf8Json(patchStream.begin(), patchStream.end(), JsonParseType::Top);

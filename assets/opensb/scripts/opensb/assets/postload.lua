@@ -26,6 +26,11 @@ for i = 1, #objects do
   assets.patch(objects[i], path)
 end
 
+-- Note: ib_itemblacklist injection is now handled in C++ (StarAssets.cpp)
+-- after all patches are applied. Doing it here before mods' patches run
+-- can cause mod patches with "test inverse:true" to fail.
+-- The tryGet() fix in StarJsonPatch.cpp now handles missing paths gracefully.
+
 assets.patch(
   "/interface/windowconfig/songbook.config",
   "/interface/windowconfig/songbook_search_patch.lua"

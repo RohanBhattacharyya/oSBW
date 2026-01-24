@@ -12,6 +12,7 @@ bool g_steamIsFlatpak = false;
 #endif
 #endif
 
+
 void Application::startup(StringList const&) {}
 
 void Application::applicationInit(ApplicationControllerPtr appController) {

@@ -51,9 +51,32 @@
 <body>
   <div id="topbar">
     <strong>OpenStarbound Web</strong>
-    <input id="pakInput" type="file" accept=".pak" />
+    <label style="display:flex; flex-direction:column; gap:4px; font-size:12px;">
+      <span style="opacity:0.8;">Base assets (packed.pak)</span>
+      <input id="pakInput" type="file" accept=".pak" />
+    </label>
+    <label style="display:flex; flex-direction:column; gap:4px; font-size:12px;">
+      <span style="opacity:0.8;">Add mod .pak(s)</span>
+      <input id="modPakInput" type="file" accept=".pak" multiple />
+    </label>
+    <label style="display:flex; flex-direction:column; gap:4px; font-size:12px;">
+      <span style="opacity:0.8;">Add mod folder</span>
+      <input id="modDirInput" type="file" webkitdirectory multiple />
+    </label>
     <button id="startBtn" class="btn" disabled>Start</button>
     <div id="status">Waiting for runtime...</div>
+  </div>
+  <div id="modsPane" style="padding: 10px 16px; border-bottom: 1px solid #1f2937; background:#0b0f14;">
+    <div style="display:flex; gap: 12px; align-items:center;">
+      <strong style="font-size: 13px;">Installed mods</strong>
+      <button id="refreshModsBtn" class="btn" style="background:#374151;">Refresh</button>
+      <button id="clearModsBtn" class="btn" style="background:#b91c1c;">Delete all</button>
+      <span style="margin-left:auto; font-size: 12px; opacity:0.8;">Mods live in <code>/mods</code> (persistent)</span>
+    </div>
+    <div id="modsList" style="margin-top: 10px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div style="margin-top: 6px; font-size:12px; opacity:0.7; line-height:1.4;">
+      Load order is determined by mod metadata (<code>priority</code>, <code>requires</code>, <code>includes</code>) and name sorting.
+    </div>
   </div>
   <progress id="uploadProgress" value="0" max="1" style="width: 100%; height: 6px; display: none;"></progress>
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
@@ -99,8 +122,11 @@
       return null;
     }
 
-    function isStoragePath(path) {
-      return typeof path === 'string' && (path === '/storage' || path.startsWith('/storage/'));
+    function isPersistentPath(path) {
+      return typeof path === 'string' && (
+        path === '/storage' || path.startsWith('/storage/') ||
+        path === '/mods' || path.startsWith('/mods/')
+      );
     }
 
     let fsSyncInstalled = false;
@@ -156,7 +182,7 @@
       const origWriteFile = fs.writeFile.bind(fs);
       fs.writeFile = function(path, data, opts) {
         const result = origWriteFile(path, data, opts);
-        if (isStoragePath(path))
+        if (isPersistentPath(path))
           scheduleSync('writeFile');
         return result;
       };
@@ -164,7 +190,7 @@
       const origClose = fs.close.bind(fs);
       fs.close = function(stream) {
         const result = origClose(stream);
-        if (stream && isStoragePath(stream.path))
+        if (stream && isPersistentPath(stream.path))
           scheduleSync('close');
         return result;
       };
@@ -236,17 +262,161 @@
         fs.mkdir('/uploads');
       if (!fs.analyzePath('/storage').exists)
         fs.mkdir('/storage');
+      if (!fs.analyzePath('/mods').exists)
+        fs.mkdir('/mods');
       if (!fs.analyzePath('/overrides').exists)
         fs.mkdir('/overrides');
 
       if (idbfs) {
-        fs.mount(idbfs, {}, '/storage');
+        // Mount persistent storage.
+        try {
+          fs.mount(idbfs, {}, '/storage');
+        } catch (err) {
+          if (!(err && (err.errno === 10 || String(err).includes('EBUSY'))))
+            throw err;
+        }
+
+        // Mount persistent mods at /mods so it matches desktop layout.
+        try {
+          fs.mount(idbfs, {}, '/mods');
+        } catch (err) {
+          if (!(err && (err.errno === 10 || String(err).includes('EBUSY'))))
+            throw err;
+        }
         return new Promise((resolve, reject) => {
           fs.syncfs(true, (err) => err ? reject(err) : resolve());
         });
       } else {
         console.warn('[Web] IDBFS is not available; saves will not persist.');
         setStatus('Warning: Persistent saves unavailable (IDBFS missing)');
+      }
+    }
+
+    function ensureDir(path) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      const parts = path.split('/').filter(Boolean);
+      let current = '';
+      for (const p of parts) {
+        current += '/' + p;
+        if (!fs.analyzePath(current).exists)
+          fs.mkdir(current);
+      }
+    }
+
+    async function writeFileFromBlob(destPath, blob, progressCb) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      ensureDir(destPath.split('/').slice(0, -1).join('/') || '/');
+
+      const size = typeof blob.size === 'number' ? blob.size : 0;
+      const chunkSize = 4 * 1024 * 1024;
+      let written = 0;
+      const fd = fs.open(destPath, 'w+');
+      try {
+        while (written < size) {
+          const end = Math.min(written + chunkSize, size);
+          const buf = new Uint8Array(await blob.slice(written, end).arrayBuffer());
+          fs.write(fd, buf, 0, buf.length, written);
+          written = end;
+          if (progressCb)
+            progressCb(written, size);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      } finally {
+        fs.close(fd);
+      }
+    }
+
+    function listModsInFs() {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      if (!fs.analyzePath('/mods').exists)
+        return [];
+      return fs.readdir('/mods')
+        .filter((n) => n !== '.' && n !== '..')
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function removeTree(path) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      const stat = fs.stat(path);
+      if (fs.isDir(stat.mode)) {
+        for (const name of fs.readdir(path)) {
+          if (name === '.' || name === '..')
+            continue;
+          removeTree(path + '/' + name);
+        }
+        fs.rmdir(path);
+      } else {
+        fs.unlink(path);
+      }
+    }
+
+    function renderModsList() {
+      const listEl = document.getElementById('modsList');
+      if (!listEl)
+        return;
+      listEl.innerHTML = '';
+
+      let mods = [];
+      try {
+        mods = listModsInFs();
+      } catch (err) {
+        const row = document.createElement('div');
+        row.textContent = 'Mods unavailable until filesystem is ready.';
+        row.style.opacity = '0.8';
+        listEl.appendChild(row);
+        return;
+      }
+
+      if (mods.length === 0) {
+        const row = document.createElement('div');
+        row.textContent = 'No mods installed.';
+        row.style.opacity = '0.8';
+        listEl.appendChild(row);
+        return;
+      }
+
+      for (const name of mods) {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.gap = '10px';
+        row.style.padding = '6px 8px';
+        row.style.border = '1px solid #1f2937';
+        row.style.borderRadius = '8px';
+
+        const label = document.createElement('div');
+        label.textContent = name;
+        label.style.flex = '1';
+        label.style.fontSize = '13px';
+
+        const del = document.createElement('button');
+        del.className = 'btn';
+        del.textContent = 'Delete';
+        del.style.background = '#b91c1c';
+        del.addEventListener('click', () => {
+          if (!confirm(`Delete mod '${name}' from /mods?`))
+            return;
+          try {
+            removeTree('/mods/' + name);
+            scheduleSync('deleteMod');
+            renderModsList();
+          } catch (err) {
+            console.error(err);
+            alert('Failed to delete: ' + err);
+          }
+        });
+
+        row.appendChild(label);
+        row.appendChild(del);
+        listEl.appendChild(row);
       }
     }
 
@@ -363,6 +533,7 @@
       const pthreadsAvailable = typeof PThread !== 'undefined' || (typeof Module !== 'undefined' && typeof Module.PThread !== 'undefined');
       const poolSize = (pthreadsAvailable && self.crossOriginIsolated) ? 4 : 0;
       const sbinit = {
+        assetDirectories: ["/mods"],
         assetSources: ["/overrides", "/uploads/packed.pak"],
         storageDirectory: "/storage",
         logDirectory: "/storage/logs",
@@ -385,6 +556,10 @@
 
     function wireUi() {
       const input = document.getElementById('pakInput');
+      const modPakInput = document.getElementById('modPakInput');
+      const modDirInput = document.getElementById('modDirInput');
+      const refreshModsBtn = document.getElementById('refreshModsBtn');
+      const clearModsBtn = document.getElementById('clearModsBtn');
       const startBtn = document.getElementById('startBtn');
       const canvas = document.getElementById('canvas');
 
@@ -401,6 +576,114 @@
       input.addEventListener('change', () => {
         updateStartButton();
       });
+
+      if (refreshModsBtn) {
+        refreshModsBtn.addEventListener('click', async () => {
+          try {
+            await ensureFsReady();
+            installFsSyncHooks();
+            renderModsList();
+          } catch (err) {
+            console.error(err);
+            setStatus('Failed to refresh mods: ' + err);
+          }
+        });
+      }
+
+      if (clearModsBtn) {
+        clearModsBtn.addEventListener('click', async () => {
+          if (!confirm('Delete ALL mods under /mods?'))
+            return;
+          try {
+            await ensureFsReady();
+            installFsSyncHooks();
+            const fs = getFs();
+            for (const name of listModsInFs())
+              removeTree('/mods/' + name);
+            scheduleSync('clearMods');
+            renderModsList();
+          } catch (err) {
+            console.error(err);
+            setStatus('Failed to delete mods: ' + err);
+          }
+        });
+      }
+
+      async function handleModPakFiles(fileList) {
+        if (!fileList || fileList.length === 0)
+          return;
+        await ensureFsReady();
+        installFsSyncHooks();
+        let index = 0;
+        for (const file of Array.from(fileList)) {
+          index++;
+          if (!file || !file.name)
+            continue;
+          const dest = '/mods/' + file.name;
+          setUploadProgress(0);
+          setStatus(`Installing mod ${index}/${fileList.length}: ${file.name}`);
+          await writeFileFromBlob(dest, file, (written, total) => {
+            const frac = total ? (written / total) : 1;
+            setUploadProgress(frac);
+          });
+          hideUploadProgress();
+          scheduleSync('installModPak');
+        }
+        hideUploadProgress();
+        setStatus('Mods installed.');
+        renderModsList();
+      }
+
+      async function handleModDirectoryFiles(fileList) {
+        if (!fileList || fileList.length === 0)
+          return;
+        await ensureFsReady();
+        installFsSyncHooks();
+
+        const files = Array.from(fileList).filter((f) => f && (f.webkitRelativePath || f.name));
+        // The browser provides relative paths like "MyMod/some/file.png".
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const rel = file.webkitRelativePath || file.name;
+          const dest = '/mods/' + rel;
+          setUploadProgress(0);
+          setStatus(`Installing mod folder (${i + 1}/${files.length}): ${rel}`);
+          await writeFileFromBlob(dest, file, (written, total) => {
+            const frac = total ? (written / total) : 1;
+            setUploadProgress(frac);
+          });
+          scheduleSync('installModFolder');
+        }
+        hideUploadProgress();
+        setStatus('Mod folder installed.');
+        renderModsList();
+      }
+
+      if (modPakInput) {
+        modPakInput.addEventListener('change', async () => {
+          try {
+            await handleModPakFiles(modPakInput.files);
+          } catch (err) {
+            console.error(err);
+            setStatus('Failed to install mod(s): ' + err);
+          } finally {
+            modPakInput.value = '';
+          }
+        });
+      }
+
+      if (modDirInput) {
+        modDirInput.addEventListener('change', async () => {
+          try {
+            await handleModDirectoryFiles(modDirInput.files);
+          } catch (err) {
+            console.error(err);
+            setStatus('Failed to install mod folder: ' + err);
+          } finally {
+            modDirInput.value = '';
+          }
+        });
+      }
 
       if (canvas) {
         canvas.addEventListener('pointerdown', () => {
@@ -422,6 +705,7 @@
           setStatus('Preparing filesystem...');
           await ensureFsReady();
           installFsSyncHooks();
+          renderModsList();
           await ensurePreloadConfig();
           hideUploadProgress();
           await ensurePakAvailable(input.files[0]);
@@ -450,7 +734,8 @@
       });
 
       updateStartButton();
-      setStatus('Ready. Upload packed.pak to start.');
+      setStatus('Ready. Select packed.pak, optionally install mods, then Start.');
+      renderModsList();
     }
 
     var Module = {

@@ -44,20 +44,36 @@ namespace JsonPath {
   template <typename Jsonlike>
   Jsonlike pathApply(Jsonlike const& base, PathParser parser, String const& path, JsonOp<Jsonlike> op);
 
+  // Non-throwing version of pathApply - returns Nothing on traversal failure
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryApply(Jsonlike const& base, PathParser parser, String const& path, JsonOp<Jsonlike> op);
+
   // Sets a value on a Json document at the location referred to by path,
   // returning the resulting new document.
   template <typename Jsonlike>
   Jsonlike pathSet(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value);
 
+  // Non-throwing version of pathSet
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTrySet(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value);
+
   // Erases the location referred to by the path from the document
   template <typename Jsonlike>
   Jsonlike pathRemove(Jsonlike const& base, PathParser parser, String const& path);
+
+  // Non-throwing version of pathRemove
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryRemove(Jsonlike const& base, PathParser parser, String const& path);
 
   // Performs RFC6902 (JSON Patching) add operation. Inserts into arrays, or
   // appends if the last path segment is "-". On objects, does the same as
   // pathSet.
   template <typename Jsonlike>
   Jsonlike pathAdd(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value);
+
+  // Non-throwing version of pathAdd
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryAdd(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value);
 
   template <typename Jsonlike>
   using EmptyPathOp = function<Jsonlike(Jsonlike const&)>;
@@ -82,6 +98,12 @@ namespace JsonPath {
       return pathGet(base, m_parser, m_path);
     }
 
+    // Non-throwing version that returns Maybe - useful for patch operations
+    template <typename Jsonlike>
+    Maybe<Jsonlike> tryGet(Jsonlike const& base) {
+      return pathFind(base, m_parser, m_path);
+    }
+
     template <typename Jsonlike>
     Jsonlike apply(Jsonlike const& base, JsonOp<Jsonlike> op) {
       return pathApply(base, m_parser, m_path, op);
@@ -101,14 +123,32 @@ namespace JsonPath {
       return pathSet(base, m_parser, m_path, value);
     }
 
+    // Non-throwing version of set
+    template <typename Jsonlike>
+    Maybe<Jsonlike> trySet(Jsonlike const& base, Jsonlike const& value) {
+      return pathTrySet(base, m_parser, m_path, value);
+    }
+
     template <typename Jsonlike>
     Jsonlike remove(Jsonlike const& base) {
       return pathRemove(base, m_parser, m_path);
     }
 
+    // Non-throwing version of remove
+    template <typename Jsonlike>
+    Maybe<Jsonlike> tryRemove(Jsonlike const& base) {
+      return pathTryRemove(base, m_parser, m_path);
+    }
+
     template <typename Jsonlike>
     Jsonlike add(Jsonlike const& base, Jsonlike const& value) {
       return pathAdd(base, m_parser, m_path, value);
+    }
+
+    // Non-throwing version of add
+    template <typename Jsonlike>
+    Maybe<Jsonlike> tryAdd(Jsonlike const& base, Jsonlike const& value) {
+      return pathTryAdd(base, m_parser, m_path, value);
     }
 
     String const& path() const {
@@ -323,6 +363,148 @@ namespace JsonPath {
       return array.append(value);
     };
     return pathApply(base, parser, path, genericObjectArrayOp(path, emptyPathOp, objectOp, arrayOp));
+  }
+
+  // Non-throwing version of pathApply helper
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryApply(String& buffer,
+      Jsonlike const& value,
+      PathParser parser,
+      String const& path,
+      String::const_iterator const current,
+      JsonOp<Jsonlike> op) {
+    if (current == path.end())
+      return op(value, {});
+
+    String::const_iterator iterator = current;
+    parser(buffer, path, iterator, path.end());
+
+    if (value.type() == Json::Type::Array) {
+      if (iterator == path.end()) {
+        return op(value, buffer);
+      } else {
+        Maybe<size_t> i = maybeLexicalCast<size_t>(buffer);
+        if (!i)
+          return {};  // Cannot parse as index
+
+        if (*i >= value.size())
+          return {};  // Index out of range
+
+        auto childResult = pathTryApply(buffer, value.get(*i), parser, path, iterator, op);
+        if (!childResult)
+          return {};
+        return value.set(*i, *childResult);
+      }
+
+    } else if (value.type() == Json::Type::Object) {
+      if (iterator == path.end()) {
+        return op(value, buffer);
+
+      } else {
+        if (!value.contains(buffer))
+          return {};  // No such key
+
+        auto childResult = pathTryApply(buffer, value.get(buffer), parser, path, iterator, op);
+        if (!childResult)
+          return {};
+        iterator = current;
+        // pathTryApply just mutated buffer. Recover the current path component:
+        parser(buffer, path, iterator, path.end());
+        return value.set(buffer, *childResult);
+      }
+
+    } else {
+      return {};  // Not an object or array
+    }
+  }
+
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryApply(Jsonlike const& base, PathParser parser, String const& path, JsonOp<Jsonlike> op) {
+    String buffer;
+    return pathTryApply(buffer, base, parser, path, path.begin(), op);
+  }
+
+  // Non-throwing version of genericObjectArrayOp that returns Maybe
+  template <typename Jsonlike>
+  using MaybeJsonOp = function<Maybe<Jsonlike>(Jsonlike const&, Maybe<String> const&)>;
+
+  template <typename Jsonlike>
+  MaybeJsonOp<Jsonlike> genericObjectArrayOpSafe(String path, EmptyPathOp<Jsonlike> emptyPathOp, ObjectOp<Jsonlike> objectOp, ArrayOp<Jsonlike> arrayOp) {
+    return [=](Jsonlike const& parent, Maybe<String> const& key) -> Maybe<Jsonlike> {
+      if (key.isNothing())
+        return emptyPathOp(parent);
+      if (parent.type() == Json::Type::Array) {
+        if (*key == "-")
+          return arrayOp(parent, {});
+        Maybe<size_t> i = maybeLexicalCast<size_t>(*key);
+        if (!i)
+          return {};  // Cannot parse as index
+        if (i && *i > parent.size())
+          return {};  // Index out of range
+        if (i && *i == parent.size())
+          i = {};
+        return arrayOp(parent, i);
+      } else if (parent.type() == Json::Type::Object) {
+        return objectOp(parent, *key);
+      } else {
+        return {};  // Not an object or array
+      }
+    };
+  }
+
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTrySet(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value) {
+    EmptyPathOp<Jsonlike> emptyPathOp = [&value](Jsonlike const&) {
+      return value;
+    };
+    ObjectOp<Jsonlike> objectOp = [&value](Jsonlike const& object, String const& key) {
+      return object.set(key, value);
+    };
+    ArrayOp<Jsonlike> arrayOp = [&value](Jsonlike const& array, Maybe<size_t> i) {
+      if (i.isValid())
+        return array.set(*i, value);
+      return array.append(value);
+    };
+    // Use the throwing version's op wrapped in try-catch is not reliable in Emscripten,
+    // so we use pathTryApply with a safe wrapper
+    JsonOp<Jsonlike> op = genericObjectArrayOp(path, emptyPathOp, objectOp, arrayOp);
+    return pathTryApply(base, parser, path, op);
+  }
+
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryRemove(Jsonlike const& base, PathParser parser, String const& path) {
+    EmptyPathOp<Jsonlike> emptyPathOp = [](Jsonlike const&) { return Json{}; };
+    ObjectOp<Jsonlike> objectOp = [](Jsonlike const& object, String const& key) -> Jsonlike {
+      if (!object.contains(key))
+        return object;  // Key doesn't exist, return unchanged
+      return object.eraseKey(key);
+    };
+    ArrayOp<Jsonlike> arrayOp = [](Jsonlike const& array, Maybe<size_t> i) -> Jsonlike {
+      if (i.isValid())
+        return array.eraseIndex(*i);
+      return array;  // Cannot remove element after end, return unchanged
+    };
+    JsonOp<Jsonlike> op = genericObjectArrayOp(path, emptyPathOp, objectOp, arrayOp);
+    return pathTryApply(base, parser, path, op);
+  }
+
+  template <typename Jsonlike>
+  Maybe<Jsonlike> pathTryAdd(Jsonlike const& base, PathParser parser, String const& path, Jsonlike const& value) {
+    EmptyPathOp<Jsonlike> emptyPathOp = [&value](Jsonlike const& document) -> Jsonlike {
+      if (document.type() == Json::Type::Null)
+        return value;
+      return document;  // Cannot add to non-empty document, return unchanged
+    };
+    ObjectOp<Jsonlike> objectOp = [&value](Jsonlike const& object, String const& key) {
+      return object.set(key, value);
+    };
+    ArrayOp<Jsonlike> arrayOp = [&value](Jsonlike const& array, Maybe<size_t> i) {
+      if (i.isValid())
+        return array.insert(*i, value);
+      return array.append(value);
+    };
+    JsonOp<Jsonlike> op = genericObjectArrayOp(path, emptyPathOp, objectOp, arrayOp);
+    return pathTryApply(base, parser, path, op);
   }
 }
 
