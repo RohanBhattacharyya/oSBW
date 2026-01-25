@@ -147,6 +147,16 @@ Assets::Assets(Settings settings, StringList assetSources) {
   const char* AssetsLuaPatchSuffix = ".patch.lua";
 
   m_settings = std::move(settings);
+
+#ifdef EMSCRIPTEN
+  // On the web, the audio callback runs in a separate thread and accessing
+  // compressed audio files (OGG) from that thread can fail because file I/O
+  // may require proxying to the main thread. Force all audio to be decompressed
+  // on load to avoid this issue. This uses more memory but ensures music plays.
+  m_settings.audioDecompressLimit = 600.0f; // 10 minutes - decompress all music tracks
+  Logger::info("Assets: Forcing audioDecompressLimit=600s on Emscripten to fix music playback");
+#endif
+
   m_stopThreads = false;
   m_assetSources = std::move(assetSources);
 

@@ -8,6 +8,7 @@
 #include "StarWorldClient.hpp"
 #include "StarWorldPainter.hpp"
 #include "StarVoice.hpp"
+#include "StarLogging.hpp"
 
 namespace Star {
 
@@ -50,6 +51,13 @@ void MainMixer::update(float dt, bool muteSfx, bool muteMusic) {
   updateGroupVolume(MixerGroup::Cinematic, false, "sfxVol");
   updateGroupVolume(MixerGroup::Instruments, muteSfx, "instrumentVol");
 
+  static bool loggedMusicVol = false;
+  if (!loggedMusicVol) {
+    float musicVol = Root::singleton().configuration()->get("musicVol").toFloat();
+    Logger::info("MainMixer: musicVol setting = {}, muteMusic = {}", musicVol, muteMusic);
+    loggedMusicVol = true;
+  }
+
   WorldClientPtr currentWorld;
   if (m_universeClient)
     currentWorld = m_universeClient->worldClient();
@@ -59,6 +67,7 @@ void MainMixer::update(float dt, bool muteSfx, bool muteMusic) {
       m_mixer->play(audioInstance);
 
     for (auto audioInstance : currentWorld->pullPendingMusic()) {
+      Logger::info("MainMixer: Playing music track, finished={}", audioInstance->finished());
       audioInstance->setMixerGroup(MixerGroup::Music);
       m_mixer->play(audioInstance);
     }

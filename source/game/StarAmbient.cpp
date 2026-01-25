@@ -6,6 +6,7 @@
 #include "StarAssets.hpp"
 #include "StarRandom.hpp"
 #include "StarGameTypes.hpp"
+#include "StarLogging.hpp"
 
 namespace Star {
 
@@ -88,13 +89,29 @@ AudioInstancePtr AmbientManager::updateAmbient(AmbientNoisesDescriptionPtr curre
       }
     }
     if (!m_currentTrackName.empty()) {
-      if (auto audio = assets->tryAudio(m_currentTrackName)) {
+      Logger::info("AmbientManager: Attempting to load music track '{}'", m_currentTrackName);
+      AudioConstPtr audio;
+#ifdef EMSCRIPTEN
+      // On Emscripten with workerPoolSize=0, tryAudio() returns empty because
+      // assets aren't loaded in background threads. Use blocking audio() instead.
+      try {
+        audio = assets->audio(m_currentTrackName);
+      } catch (std::exception const& e) {
+        Logger::warn("AmbientManager: Failed to load music track '{}': {}", m_currentTrackName, e.what());
+      }
+#else
+      audio = assets->tryAudio(m_currentTrackName);
+#endif
+      if (audio) {
+        Logger::info("AmbientManager: Successfully loaded music track '{}', duration={}s, compressed={}", 
+            m_currentTrackName, audio->totalTime(), audio->compressed());
         m_recentTracks.append(m_currentTrackName);
         m_currentTrack = make_shared<AudioInstance>(*audio);
         m_currentTrack->setLoops(current ? current->trackLoops : -1);
         // Slowly fade the music track in
         m_currentTrack->setVolume(0.0f);
         m_currentTrack->setVolume(m_volume, m_trackFadeInTime);
+        Logger::info("AmbientManager: Created AudioInstance for '{}', target volume={}", m_currentTrackName, m_volume);
         m_delay = 0;
         m_duration = 0;
         m_volumeChanged = false;
@@ -138,7 +155,17 @@ AudioInstancePtr AmbientManager::updateWeather(WeatherNoisesDescriptionPtr curre
   if (!m_weatherTrack) {
     m_weatherTrackName = Random::randValueFrom(tracks);
     if (!m_weatherTrackName.empty()) {
-      if (auto audio = assets->tryAudio(m_weatherTrackName)) {
+      AudioConstPtr audio;
+#ifdef EMSCRIPTEN
+      try {
+        audio = assets->audio(m_weatherTrackName);
+      } catch (std::exception const& e) {
+        Logger::warn("AmbientManager: Failed to load weather track '{}': {}", m_weatherTrackName, e.what());
+      }
+#else
+      audio = assets->tryAudio(m_weatherTrackName);
+#endif
+      if (audio) {
         m_weatherTrack = make_shared<AudioInstance>(*audio);
         m_weatherTrack->setLoops(-1);
         m_weatherTrack->setVolume(0.0f);
