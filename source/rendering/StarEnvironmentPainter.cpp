@@ -158,6 +158,14 @@ void EnvironmentPainter::renderPlanetHorizon(float pixelRatio, Vec2F const& scre
   if (planetHorizon.empty())
     return;
 
+#ifdef EMSCRIPTEN
+  // On Emscripten, use blocking loadTexture since tryTexture/tryImage doesn't work
+  // properly with workerPoolSize=0 (assets don't load in background)
+  for (auto const& layer : planetHorizon.layers) {
+    m_textureGroup->loadTexture(layer.first);
+    m_textureGroup->loadTexture(layer.second);
+  }
+#else
   // Can't bail sooner, need to queue all textures
   bool allLoaded = true;
   for (auto const& layer : planetHorizon.layers) {
@@ -167,6 +175,7 @@ void EnvironmentPainter::renderPlanetHorizon(float pixelRatio, Vec2F const& scre
 
   if (!allLoaded)
     return;
+#endif
 
   float planetPixelRatio = pixelRatio * planetHorizon.scale;
   Vec2F center = planetHorizon.center * pixelRatio;
@@ -329,7 +338,13 @@ void EnvironmentPainter::renderParallaxLayers(
             int frame = (layer.frameOffset + clamp<int>(frame_number, 0, layer.frameNumber - 1)) % layer.frameNumber;
             withDirectives.subPath.emplace(toString(frame));
           }
+#ifdef EMSCRIPTEN
+          // On Emscripten, use blocking loadTexture since tryTexture/tryImage doesn't work
+          // properly with workerPoolSize=0 (assets don't load in background)
+          if (auto texture = m_textureGroup->loadTexture(withDirectives)) {
+#else
           if (auto texture = m_textureGroup->tryTexture(withDirectives)) {
+#endif
             RectF drawRect = RectF::withSize(anchorPoint, subImage.size() * camera.pixelRatio());
             primitives.emplace_back(std::in_place_type_t<RenderQuad>(), std::move(texture),
                 RenderVertex{drawRect.min(), subImage.min(), drawColor, lightMapMultiplier},
