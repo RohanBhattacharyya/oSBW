@@ -360,8 +360,10 @@ void TextPainter::applyCommands(StringView unsplitCommands) {
       } else if (command.beginsWith("shadow")) {
         if (command.utf8Size() == 6)
           m_renderSettings.shadow = Color::Black.toRgba();
-        else if (command.utf8()[6] == '=')
-          m_renderSettings.shadow = Color(command.substr(7)).toRgba();
+        else if (command.utf8()[6] == '=') {
+          if (auto shadowColor = Color::tryNamed(command.substr(7)))
+            m_renderSettings.shadow = shadowColor->toRgba();
+        }
       } else if (command == "noshadow") {
         m_renderSettings.shadow = Color::Clear.toRgba();
       } else if (command.beginsWith("font=")) {
@@ -372,12 +374,14 @@ void TextPainter::applyCommands(StringView unsplitCommands) {
         setProcessingDirectives(command.substr(15), true);
       } else {
         // expects both #... sequences and plain old color names.
-        Color c = Color(command);
-        c.setAlphaF(c.alphaF() * ((float)m_savedRenderSettings.color[3]) / 255);
-        m_renderSettings.color = c.toRgba();
+        // Use tryNamed to avoid throwing on invalid colors - just ignore them
+        if (auto maybeColor = Color::tryNamed(command)) {
+          Color c = *maybeColor;
+          c.setAlphaF(c.alphaF() * ((float)m_savedRenderSettings.color[3]) / 255);
+          m_renderSettings.color = c.toRgba();
+        }
       }
     } catch (JsonException&) {
-    } catch (ColorException&) {
     }
   });
 }

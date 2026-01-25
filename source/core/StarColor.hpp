@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StarMaybe.hpp"
 #include "StarStringView.hpp"
 #include "StarVector.hpp"
 #include "StarFormat.hpp"
@@ -68,6 +69,9 @@ public:
 
   static Vec4B hueShiftVec4B(Vec4B color, float hue);
   static Vec4B hexToVec4B(StringView s);
+  // Non-throwing versions - return Nothing on failure
+  static Maybe<Vec4B> tryHexToVec4B(StringView s);
+  static Maybe<Color> tryNamed(StringView name);
   // Black
   Color();
 

@@ -46,6 +46,20 @@
     input[type="file"] {
       color: #e5e7eb;
     }
+    body.fullscreen #topbar,
+    body.fullscreen #modsPane,
+    body.fullscreen #uploadProgress {
+      display: none !important;
+    }
+    body.fullscreen #canvas {
+      height: 100vh;
+    }
+    #fullscreenBtn {
+      background: #374151;
+    }
+    #fullscreenBtn:hover {
+      background: #4b5563;
+    }
   </style>
 </head>
 <body>
@@ -64,6 +78,7 @@
       <input id="modDirInput" type="file" webkitdirectory multiple />
     </label>
     <button id="startBtn" class="btn" disabled>Start</button>
+    <button id="fullscreenBtn" class="btn" title="Toggle fullscreen (hides UI)">⛶ Fullscreen</button>
     <div id="status">Waiting for runtime...</div>
   </div>
   <div id="modsPane" style="padding: 10px 16px; border-bottom: 1px solid #1f2937; background:#0b0f14;">
@@ -73,7 +88,7 @@
       <button id="clearModsBtn" class="btn" style="background:#b91c1c;">Delete all</button>
       <span style="margin-left:auto; font-size: 12px; opacity:0.8;">Mods live in <code>/mods</code> (persistent)</span>
     </div>
-    <div id="modsList" style="margin-top: 10px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div id="modsList" style="margin-top: 10px; display:flex; flex-direction:column; gap:6px;"><div style="opacity:0.8; font-style:italic;">Loading mods...</div></div>
     <div style="margin-top: 6px; font-size:12px; opacity:0.7; line-height:1.4;">
       Load order is determined by mod metadata (<code>priority</code>, <code>requires</code>, <code>includes</code>) and name sorting.
     </div>
@@ -561,12 +576,14 @@
       const refreshModsBtn = document.getElementById('refreshModsBtn');
       const clearModsBtn = document.getElementById('clearModsBtn');
       const startBtn = document.getElementById('startBtn');
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
       const canvas = document.getElementById('canvas');
 
       runtimeReady = true;
+      let modUploadPending = false;
 
       const updateStartButton = () => {
-        startBtn.disabled = !(runtimeReady && input.files && input.files.length > 0);
+        startBtn.disabled = !(runtimeReady && input.files && input.files.length > 0 && !modUploadPending);
       };
 
       waitForFsAvailable().then(updateStartButton).catch(() => {
@@ -576,6 +593,32 @@
       input.addEventListener('change', () => {
         updateStartButton();
       });
+
+      // Fullscreen toggle
+      if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', () => {
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().then(() => {
+              document.body.classList.add('fullscreen');
+              resizeCanvasToDisplaySize();
+              if (canvas) canvas.focus();
+            }).catch((err) => {
+              console.warn('[Web] Fullscreen request failed:', err);
+            });
+          } else {
+            document.exitFullscreen().catch((err) => {
+              console.warn('[Web] Exit fullscreen failed:', err);
+            });
+          }
+        });
+
+        document.addEventListener('fullscreenchange', () => {
+          if (!document.fullscreenElement) {
+            document.body.classList.remove('fullscreen');
+          }
+          resizeCanvasToDisplaySize();
+        });
+      }
 
       if (refreshModsBtn) {
         refreshModsBtn.addEventListener('click', async () => {
@@ -630,8 +673,16 @@
           scheduleSync('installModPak');
         }
         hideUploadProgress();
-        setStatus('Mods installed.');
+        setStatus('Mods installed. Syncing storage...');
         renderModsList();
+        // Keep Start disabled for 1.5s to allow IndexedDB sync
+        modUploadPending = true;
+        updateStartButton();
+        setTimeout(() => {
+          modUploadPending = false;
+          updateStartButton();
+          setStatus('Mods ready.');
+        }, 1500);
       }
 
       async function handleModDirectoryFiles(fileList) {
@@ -655,8 +706,16 @@
           scheduleSync('installModFolder');
         }
         hideUploadProgress();
-        setStatus('Mod folder installed.');
+        setStatus('Mod folder installed. Syncing storage...');
         renderModsList();
+        // Keep Start disabled for 1.5s to allow IndexedDB sync
+        modUploadPending = true;
+        updateStartButton();
+        setTimeout(() => {
+          modUploadPending = false;
+          updateStartButton();
+          setStatus('Mods ready.');
+        }, 1500);
       }
 
       if (modPakInput) {
@@ -735,7 +794,14 @@
 
       updateStartButton();
       setStatus('Ready. Select packed.pak, optionally install mods, then Start.');
-      renderModsList();
+
+      // Load persisted mods from IndexedDB on startup
+      ensureFsReady().then(() => {
+        renderModsList();
+      }).catch((err) => {
+        console.warn('[Web] Could not load persisted mods on startup:', err);
+        renderModsList(); // Still render even if FS not ready - will show placeholder
+      });
     }
 
     var Module = {

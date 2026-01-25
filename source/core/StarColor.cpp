@@ -3,6 +3,7 @@
 #include "StarEncode.hpp"
 #include "StarFormat.hpp"
 #include "StarInterpolation.hpp"
+#include "StarLogging.hpp"
 
 namespace Star {
 
@@ -218,15 +219,27 @@ Color Color::gray(uint8_t g) {
 
 Color::Color() {}
 
-Color::Color(StringView name) {
-  if (name.utf8().rfind('#', 0) == 0)
-    *this = fromHex(name.utf8().substr(1));
-  else {
+Maybe<Color> Color::tryNamed(StringView name) {
+  if (name.utf8().rfind('#', 0) == 0) {
+    if (auto vec = tryHexToVec4B(name.utf8().substr(1)))
+      return Color::rgba(*vec);
+    return {};
+  } else {
     auto i = NamedColors.find(String(name));
     if (i != NamedColors.end())
-      *this = i->second;
-    else
-      throw ColorException(strf("Named color {} not found", name), false);
+      return i->second;
+    return {};
+  }
+}
+
+Color::Color(StringView name) {
+  if (auto color = tryNamed(name)) {
+    *this = *color;
+  } else {
+    // Return magenta to indicate error (common convention for missing textures/colors)
+    // and log a warning instead of throwing, for Emscripten compatibility
+    Logger::warn("Invalid color '{}', using magenta fallback", name);
+    *this = Magenta;
   }
 }
 
@@ -607,6 +620,33 @@ Vec4B Color::hueShiftVec4B(Vec4B color, float hue) {
 
     return Vec4B(uint8_t(round(var_r * 255)), uint8_t(round(var_g * 255)), uint8_t(round(var_b * 255)), color[3]);
   }
+}
+
+Maybe<Vec4B> Color::tryHexToVec4B(StringView s) {
+  Array<uint8_t, 4> cbytes;
+
+  if (s.utf8Size() == 3) {
+    nibbleDecode(s.utf8Ptr(), 3, (char*)cbytes.data(), 4);
+    cbytes[0] = (cbytes[0] << 4) | cbytes[0];
+    cbytes[1] = (cbytes[1] << 4) | cbytes[1];
+    cbytes[2] = (cbytes[2] << 4) | cbytes[2];
+    cbytes[3] = 255;
+  } else if (s.utf8Size() == 4) {
+    nibbleDecode(s.utf8Ptr(), 4, (char*)cbytes.data(), 4);
+    cbytes[0] = (cbytes[0] << 4) | cbytes[0];
+    cbytes[1] = (cbytes[1] << 4) | cbytes[1];
+    cbytes[2] = (cbytes[2] << 4) | cbytes[2];
+    cbytes[3] = (cbytes[3] << 4) | cbytes[3];
+  } else if (s.utf8Size() == 6) {
+    hexDecode(s.utf8Ptr(), 6, (char*)cbytes.data(), 4);
+    cbytes[3] = 255;
+  } else if (s.utf8Size() == 8) {
+    hexDecode(s.utf8Ptr(), 8, (char*)cbytes.data(), 4);
+  } else {
+    return {};
+  }
+
+  return Vec4B(std::move(cbytes));
 }
 
 Vec4B Color::hexToVec4B(StringView s) {

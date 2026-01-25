@@ -213,16 +213,25 @@ Maybe<CelestialCoordinate> CelestialMasterDatabase::findRandomWorld(unsigned tri
   for (unsigned i = 0; i < tries; ++i) {
     RectI range = xyRange();
     Vec2I randomLocation = Vec2I(randSource.randInt(range.xMin(), range.xMax()), randSource.randInt(range.yMin(), range.yMax()));
+    
+    // Collect all candidate worlds from all systems in this region
+    List<CelestialCoordinate> candidateWorlds;
     for (auto& system : scanSystems(RectI::withCenter(randomLocation, Vec2I::filled(trySpatialRange)))) {
       if (!hasChildren(system).value(false))
         continue;
 
-      auto world = randSource.randFrom(children(system));
-      // This sucks, 50% of the time will try and return satellite, not really
-      // balanced probability wise
-      if (hasChildren(world).value(false) && randSource.randb())
-        world = randSource.randFrom(children(world));
-
+      for (auto& planet : children(system)) {
+        candidateWorlds.append(planet);
+        if (hasChildren(planet).value(false)) {
+          for (auto& satellite : children(planet))
+            candidateWorlds.append(satellite);
+        }
+      }
+    }
+    
+    // Shuffle and test all candidates before trying a new region
+    randSource.shuffle(candidateWorlds);
+    for (auto& world : candidateWorlds) {
       if (!filter || filter(world))
         return world;
     }
