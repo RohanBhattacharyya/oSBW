@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenStarbound (Web)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     body {
       margin: 0;
@@ -48,6 +49,7 @@
     }
     body.fullscreen #topbar,
     body.fullscreen #modsPane,
+    body.fullscreen #saveDataPane,
     body.fullscreen #uploadProgress {
       display: none !important;
     }
@@ -91,6 +93,17 @@
     <div id="modsList" style="margin-top: 10px; display:flex; flex-direction:column; gap:6px;"><div style="opacity:0.8; font-style:italic;">Loading mods...</div></div>
     <div style="margin-top: 6px; font-size:12px; opacity:0.7; line-height:1.4;">
       Load order is determined by mod metadata (<code>priority</code>, <code>requires</code>, <code>includes</code>) and name sorting.
+    </div>
+  </div>
+  <div id="saveDataPane" style="padding: 10px 16px; border-bottom: 1px solid #1f2937; background:#0b0f14;">
+    <div style="display:flex; gap: 12px; align-items:center; flex-wrap: wrap;">
+      <strong style="font-size: 13px;">Save Data</strong>
+      <button id="exportSaveBtn" class="btn" style="background:#059669;">Export All</button>
+      <label class="btn" style="background:#7c3aed; cursor:pointer;">
+        Import
+        <input id="importSaveInput" type="file" accept=".zip" style="display:none;" />
+      </label>
+      <span style="margin-left:auto; font-size: 12px; opacity:0.8;">Export/import saves &amp; mods as a .zip file</span>
     </div>
   </div>
   <progress id="uploadProgress" value="0" max="1" style="width: 100%; height: 6px; display: none;"></progress>
@@ -435,6 +448,187 @@
       }
     }
 
+    // Recursively collect all files from a directory into a flat list
+    function collectFilesRecursive(basePath, relativePath = '') {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      const files = [];
+      const fullPath = basePath + (relativePath ? '/' + relativePath : '');
+      
+      if (!fs.analyzePath(fullPath).exists)
+        return files;
+      
+      const entries = fs.readdir(fullPath);
+      for (const name of entries) {
+        if (name === '.' || name === '..')
+          continue;
+        const entryRelPath = relativePath ? relativePath + '/' + name : name;
+        const entryFullPath = basePath + '/' + entryRelPath;
+        const stat = fs.stat(entryFullPath);
+        
+        if (fs.isDir(stat.mode)) {
+          files.push(...collectFilesRecursive(basePath, entryRelPath));
+        } else {
+          files.push({
+            relativePath: entryRelPath,
+            fullPath: entryFullPath,
+            size: stat.size
+          });
+        }
+      }
+      return files;
+    }
+
+    async function exportSaveData() {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      
+      if (typeof JSZip === 'undefined')
+        throw new Error('JSZip library not loaded.');
+      
+      const zip = new JSZip();
+      
+      // Collect files from /storage and /mods
+      const storageFiles = collectFilesRecursive('/storage');
+      const modsFiles = collectFilesRecursive('/mods');
+      
+      const totalFiles = storageFiles.length + modsFiles.length;
+      if (totalFiles === 0) {
+        throw new Error('No save data or mods to export.');
+      }
+      
+      let processed = 0;
+      
+      // Add storage files
+      for (const file of storageFiles) {
+        const data = fs.readFile(file.fullPath);
+        zip.file('storage/' + file.relativePath, data);
+        processed++;
+        setUploadProgress(processed / totalFiles);
+        setStatus(`Packing save data: ${processed}/${totalFiles} files...`);
+        await new Promise(r => setTimeout(r, 0)); // Yield to UI
+      }
+      
+      // Add mods files
+      for (const file of modsFiles) {
+        const data = fs.readFile(file.fullPath);
+        zip.file('mods/' + file.relativePath, data);
+        processed++;
+        setUploadProgress(processed / totalFiles);
+        setStatus(`Packing mods: ${processed}/${totalFiles} files...`);
+        await new Promise(r => setTimeout(r, 0)); // Yield to UI
+      }
+      
+      setStatus('Compressing archive...');
+      const blob = await zip.generateAsync({ 
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      }, (metadata) => {
+        setUploadProgress(metadata.percent / 100);
+      });
+      
+      // Generate filename with timestamp
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `openstarbound-save-${timestamp}.zip`;
+      
+      // Trigger download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      hideUploadProgress();
+      setStatus(`Exported ${totalFiles} files (${formatBytes(blob.size)})`);
+    }
+
+    async function importSaveData(file) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      
+      if (typeof JSZip === 'undefined')
+        throw new Error('JSZip library not loaded.');
+      
+      setStatus('Reading archive...');
+      const zip = await JSZip.loadAsync(file);
+      
+      const entries = [];
+      zip.forEach((relativePath, zipEntry) => {
+        if (!zipEntry.dir) {
+          entries.push({ relativePath, zipEntry });
+        }
+      });
+      
+      if (entries.length === 0) {
+        throw new Error('Archive is empty or contains no files.');
+      }
+      
+      // Validate that archive contains expected structure
+      const hasStorage = entries.some(e => e.relativePath.startsWith('storage/'));
+      const hasMods = entries.some(e => e.relativePath.startsWith('mods/'));
+      
+      if (!hasStorage && !hasMods) {
+        throw new Error('Archive does not contain storage/ or mods/ directories. Invalid save file.');
+      }
+      
+      // Confirm import
+      const storageCount = entries.filter(e => e.relativePath.startsWith('storage/')).length;
+      const modsCount = entries.filter(e => e.relativePath.startsWith('mods/')).length;
+      const msg = `Import ${storageCount} save files and ${modsCount} mod files?\n\nThis will REPLACE existing save data and mods.`;
+      if (!confirm(msg))
+        return;
+      
+      // Clear existing data
+      setStatus('Clearing existing data...');
+      if (fs.analyzePath('/storage').exists) {
+        for (const name of fs.readdir('/storage')) {
+          if (name !== '.' && name !== '..')
+            removeTree('/storage/' + name);
+        }
+      }
+      if (fs.analyzePath('/mods').exists) {
+        for (const name of fs.readdir('/mods')) {
+          if (name !== '.' && name !== '..')
+            removeTree('/mods/' + name);
+        }
+      }
+      
+      // Extract files
+      let processed = 0;
+      for (const { relativePath, zipEntry } of entries) {
+        const destPath = '/' + relativePath;
+        const data = await zipEntry.async('uint8array');
+        
+        // Ensure parent directories exist
+        ensureDir(destPath.split('/').slice(0, -1).join('/') || '/');
+        
+        fs.writeFile(destPath, data);
+        processed++;
+        setUploadProgress(processed / entries.length);
+        setStatus(`Extracting: ${processed}/${entries.length} files...`);
+        await new Promise(r => setTimeout(r, 0)); // Yield to UI
+      }
+      
+      // Sync to IndexedDB
+      scheduleSync('importSave');
+      hideUploadProgress();
+      renderModsList();
+      setStatus(`Imported ${processed} files. Syncing to storage...`);
+      
+      // Force sync and wait a bit
+      forceSyncNow('import');
+      await new Promise(r => setTimeout(r, 1500));
+      setStatus('Import complete. Refresh page to use new save data.');
+    }
+
     async function ensurePreloadConfig() {
       const fs = getFs();
       if (!fs)
@@ -648,6 +842,46 @@
           } catch (err) {
             console.error(err);
             setStatus('Failed to delete mods: ' + err);
+          }
+        });
+      }
+
+      // Export save data
+      const exportSaveBtn = document.getElementById('exportSaveBtn');
+      if (exportSaveBtn) {
+        exportSaveBtn.addEventListener('click', async () => {
+          try {
+            await ensureFsReady();
+            setUploadProgress(0);
+            await exportSaveData();
+          } catch (err) {
+            console.error(err);
+            hideUploadProgress();
+            setStatus('Export failed: ' + err.message);
+            alert('Export failed: ' + err.message);
+          }
+        });
+      }
+
+      // Import save data
+      const importSaveInput = document.getElementById('importSaveInput');
+      if (importSaveInput) {
+        importSaveInput.addEventListener('change', async () => {
+          const file = importSaveInput.files && importSaveInput.files[0];
+          if (!file)
+            return;
+          try {
+            await ensureFsReady();
+            installFsSyncHooks();
+            setUploadProgress(0);
+            await importSaveData(file);
+          } catch (err) {
+            console.error(err);
+            hideUploadProgress();
+            setStatus('Import failed: ' + err.message);
+            alert('Import failed: ' + err.message);
+          } finally {
+            importSaveInput.value = '';
           }
         });
       }
