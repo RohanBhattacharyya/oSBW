@@ -893,12 +893,29 @@ shared_ptr<Assets::AssetData> Assets::tryAsset(AssetId const& id) const {
       throw AssetException::format("Error loading asset {}", id.path);
     }
   } else {
+#ifdef EMSCRIPTEN
+    // On Emscripten with workerPoolSize=0, there are no background workers to process
+    // the asset queue. Instead of just queuing (which would never load), attempt to
+    // load the asset synchronously. This allows tryImage/tryAudio to work properly
+    // without requiring blocking getAsset calls that can cause pthread proxy deadlocks.
+    // Unlike getAsset, we don't block waiting - if doLoad returns false (asset is
+    // being worked on by another call), we just return null and try again next frame.
+    if (doLoad(id)) {
+      auto j = m_assetsCache.find(id);
+      if (j != m_assetsCache.end() && j->second) {
+        freshen(j->second);
+        return j->second;
+      }
+    }
+    return {};
+#else
     auto j = m_queue.find(id);
     if (j == m_queue.end()) {
       m_queue[id] = QueuePriority::Load;
       m_assetsQueued.signal();
     }
     return {};
+#endif
   }
 }
 
