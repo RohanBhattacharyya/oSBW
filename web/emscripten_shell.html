@@ -62,6 +62,72 @@
     #fullscreenBtn:hover {
       background: #4b5563;
     }
+
+    #consoleBtn {
+      background: #374151;
+    }
+    #consoleBtn:hover {
+      background: #4b5563;
+    }
+
+    #consoleModal {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: none;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(2px);
+    }
+    #consoleModal.open {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #consoleModal .panel {
+      width: min(1200px, 95vw);
+      height: min(720px, 90vh);
+      background: #0b0f14;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #consoleModal .panelHeader {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #1f2937;
+      background: #101010;
+    }
+    #consoleModal .panelHeader strong {
+      font-size: 13px;
+    }
+    #consoleModal .panelHeader .spacer {
+      margin-left: auto;
+    }
+    #consoleModal textarea {
+      flex: 1;
+      width: 100%;
+      resize: none;
+      padding: 12px;
+      border: none;
+      outline: none;
+      color: #e5e7eb;
+      background: #0b0f14;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: pre;
+      overflow: auto;
+    }
+    #consoleModal .meta {
+      font-size: 12px;
+      opacity: 0.75;
+    }
   </style>
 </head>
 <body>
@@ -81,6 +147,7 @@
     </label>
     <button id="startBtn" class="btn" disabled>Start</button>
     <button id="fullscreenBtn" class="btn" title="Toggle fullscreen (hides UI)">⛶ Fullscreen</button>
+    <button id="consoleBtn" class="btn" title="View captured JS console (no DevTools)">Console</button>
     <div id="status">Waiting for runtime...</div>
   </div>
   <div id="modsPane" style="padding: 10px 16px; border-bottom: 1px solid #1f2937; background:#0b0f14;">
@@ -109,7 +176,159 @@
   <progress id="uploadProgress" value="0" max="1" style="width: 100%; height: 6px; display: none;"></progress>
   <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
 
+  <div id="consoleModal" aria-hidden="true">
+    <div class="panel" role="dialog" aria-modal="true" aria-label="JavaScript Console Log">
+      <div class="panelHeader">
+        <strong>Console Log</strong>
+        <span id="consoleMeta" class="meta"></span>
+        <span class="spacer"></span>
+        <button id="consoleSaveBtn" class="btn" style="background:#059669;">Save .txt</button>
+        <button id="consoleClearBtn" class="btn" style="background:#b91c1c;">Clear</button>
+        <button id="consoleCloseBtn" class="btn" style="background:#374151;">Close</button>
+      </div>
+      <textarea id="consoleText" readonly spellcheck="false"></textarea>
+    </div>
+  </div>
+
   <script>
+    // Capture console output so users can export it without opening DevTools.
+    // Includes Module.print/printErr (stdout/stderr), console.*, and window error events.
+    const ConsoleCapture = (() => {
+      const buffer = [];
+      const maxEntries = 20000;
+
+      const original = {
+        log: console.log.bind(console),
+        info: (console.info || console.log).bind(console),
+        warn: (console.warn || console.log).bind(console),
+        error: (console.error || console.log).bind(console),
+        debug: (console.debug || console.log).bind(console),
+      };
+
+      function safeStringify(value) {
+        const seen = new WeakSet();
+        return JSON.stringify(value, (key, val) => {
+          if (typeof val === 'object' && val !== null) {
+            if (seen.has(val))
+              return '[Circular]';
+            seen.add(val);
+          }
+          if (typeof val === 'bigint')
+            return String(val) + 'n';
+          return val;
+        });
+      }
+
+      function formatArg(arg) {
+        try {
+          if (arg instanceof Error)
+            return arg.stack || (arg.name + ': ' + arg.message);
+          if (typeof arg === 'string')
+            return arg;
+          if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint')
+            return String(arg);
+          if (arg === null)
+            return 'null';
+          if (typeof arg === 'undefined')
+            return 'undefined';
+          if (typeof arg === 'object') {
+            const json = safeStringify(arg);
+            if (json && json.length)
+              return json;
+          }
+          return String(arg);
+        } catch (e) {
+          return '[Unserializable]';
+        }
+      }
+
+      function push(level, args) {
+        const ts = new Date().toISOString();
+        const msg = (args || []).map(formatArg).join(' ');
+        buffer.push(`[${ts}] [${level}] ${msg}`);
+        if (buffer.length > maxEntries)
+          buffer.splice(0, buffer.length - maxEntries);
+      }
+
+      function wrap(level, fn) {
+        return (...args) => {
+          push(level, args);
+          try {
+            fn(...args);
+          } catch (_) {
+            // ignore console failures
+          }
+        };
+      }
+
+      console.log = wrap('log', original.log);
+      console.info = wrap('info', original.info);
+      console.warn = wrap('warn', original.warn);
+      console.error = wrap('error', original.error);
+      console.debug = wrap('debug', original.debug);
+
+      return {
+        push,
+        clear: () => { buffer.length = 0; },
+        count: () => buffer.length,
+        getText: () => buffer.join('\n'),
+        download: (filename) => {
+          const text = buffer.join('\n') + (buffer.length ? '\n' : '');
+          const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename || 'openstarbound-console.txt';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        },
+      };
+    })();
+
+    let consoleRefreshTimer = null;
+
+    function refreshConsoleView({ keepScrollToBottom } = {}) {
+      const modal = document.getElementById('consoleModal');
+      const textarea = document.getElementById('consoleText');
+      const meta = document.getElementById('consoleMeta');
+      if (!modal || !textarea)
+        return;
+      if (!modal.classList.contains('open'))
+        return;
+
+      const shouldStick = keepScrollToBottom || (textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 4);
+      textarea.value = ConsoleCapture.getText();
+      if (meta)
+        meta.textContent = `(${ConsoleCapture.count()} lines)`;
+      if (shouldStick)
+        textarea.scrollTop = textarea.scrollHeight;
+    }
+
+    function openConsoleModal() {
+      const modal = document.getElementById('consoleModal');
+      if (!modal)
+        return;
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+      refreshConsoleView({ keepScrollToBottom: true });
+      if (!consoleRefreshTimer)
+        consoleRefreshTimer = setInterval(() => refreshConsoleView(), 500);
+    }
+
+    function closeConsoleModal() {
+      const modal = document.getElementById('consoleModal');
+      if (!modal)
+        return;
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+      if (consoleRefreshTimer) {
+        clearInterval(consoleRefreshTimer);
+        consoleRefreshTimer = null;
+      }
+    }
+
     function setStatus(text) {
       const el = document.getElementById('status');
       if (el) el.textContent = text;
@@ -771,6 +990,11 @@
       const clearModsBtn = document.getElementById('clearModsBtn');
       const startBtn = document.getElementById('startBtn');
       const fullscreenBtn = document.getElementById('fullscreenBtn');
+      const consoleBtn = document.getElementById('consoleBtn');
+      const consoleModal = document.getElementById('consoleModal');
+      const consoleCloseBtn = document.getElementById('consoleCloseBtn');
+      const consoleSaveBtn = document.getElementById('consoleSaveBtn');
+      const consoleClearBtn = document.getElementById('consoleClearBtn');
       const canvas = document.getElementById('canvas');
 
       runtimeReady = true;
@@ -813,6 +1037,37 @@
           resizeCanvasToDisplaySize();
         });
       }
+
+      // In-page console viewer (so users don't need DevTools)
+      if (consoleBtn)
+        consoleBtn.addEventListener('click', () => openConsoleModal());
+
+      if (consoleCloseBtn)
+        consoleCloseBtn.addEventListener('click', () => closeConsoleModal());
+
+      if (consoleSaveBtn)
+        consoleSaveBtn.addEventListener('click', () => {
+          const ts = new Date().toISOString().replace(/[:]/g, '-');
+          ConsoleCapture.download(`openstarbound-console-${ts}.txt`);
+        });
+
+      if (consoleClearBtn)
+        consoleClearBtn.addEventListener('click', () => {
+          ConsoleCapture.clear();
+          refreshConsoleView({ keepScrollToBottom: true });
+        });
+
+      if (consoleModal) {
+        consoleModal.addEventListener('click', (ev) => {
+          if (ev.target === consoleModal)
+            closeConsoleModal();
+        });
+      }
+
+      window.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape')
+          closeConsoleModal();
+      });
 
       if (refreshModsBtn) {
         refreshModsBtn.addEventListener('click', async () => {
