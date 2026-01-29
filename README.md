@@ -1,9 +1,9 @@
-# OpenStarbound
+# OpenStarbound Web Fork
 
 <details>
 <summary><b>What is this?</b></summary>
  
-tl;dr: **OpenStarbound** is a mod of the latest version of Starbound, 1.4.4. It fixes many bugs, adds many new features and improves performance.
+tl;dr: **OpenStarbound** is a mod of the latest version of Starbound, 1.4.4. It fixes many bugs, adds many new features and improves performance. This is the web version, so that users can run the Starbound engine on modern browsers.
 
 By a truly unbelievable coincidence, I was recently out for a walk when I saw a small package fall off a truck ahead of me.  As I got closer, the typeface slowly came into focus: **Starbound**. Inside, I found a submachine gun, a fursuit (tells you something about their audience I guess!), and the latest version of the [**Starbound source code**](https://archive.org/details/starbound_source_code).
 
