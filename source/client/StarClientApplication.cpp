@@ -1049,6 +1049,13 @@ void ClientApplication::updateRunning(float dt) {
     auto p2pNetworkingService = app->p2pNetworkingService();
     bool clientIPJoinable = m_root->configuration()->get("clientIPJoinable").toBool();
     bool clientP2PJoinable = m_root->configuration()->get("clientP2PJoinable").toBool();
+
+  #ifdef STAR_SYSTEM_EMSCRIPTEN
+    // Browser builds cannot accept raw TCP or platform P2P connections.
+    // Force these off even if a saved config enables them.
+    clientIPJoinable = false;
+    clientP2PJoinable = false;
+  #endif
     Maybe<pair<uint16_t, uint16_t>> party = make_pair(m_universeClient->players(), m_universeClient->maxPlayers());
 
     if (m_state == MainAppState::MultiPlayer) {

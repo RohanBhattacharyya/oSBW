@@ -150,6 +150,7 @@ option(STAR_USE_RPMALLOC "Use rpmalloc allocators" OFF)
 
 if(EMSCRIPTEN)
   option(STAR_WEB_PTHREADS "Enable Emscripten PThreads (requires COOP/COEP headers)" OFF)
+  option(STAR_WEB_SAFE_HEAP "Enable Emscripten SAFE_HEAP checks (slow; may abort on misaligned accesses)" OFF)
 endif()
 
 # Report all the discovered system / environment settings and all options.

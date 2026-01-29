@@ -48,6 +48,10 @@ Json const BaseDefaultConfiguration = Json::parseJson(R"JSON(
       "queryServerBind" : "*",
       "rconServerBind" : "*",
 )JSON"
+#elif defined STAR_SYSTEM_EMSCRIPTEN
+                  R"JSON(
+  "gameServerBind" : "*",
+)JSON"
 #else
                                                       R"JSON(
       "gameServerBind" : "::",

@@ -6,6 +6,10 @@
   <title>OpenStarbound (Web)</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
+    html,
+    body {
+      height: 100%;
+    }
     body {
       margin: 0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -27,7 +31,8 @@
     }
     #canvas {
       width: 100vw;
-      height: calc(100vh - 56px);
+      height: 100vh;
+      height: 100dvh;
       display: block;
       background: #000;
     }
@@ -55,6 +60,7 @@
     }
     body.fullscreen #canvas {
       height: 100vh;
+      height: 100dvh;
     }
     #fullscreenBtn {
       background: #374151;
@@ -340,7 +346,7 @@
         return;
       const ratio = window.devicePixelRatio || 1;
       const cssWidth = canvas.clientWidth || window.innerWidth;
-      const cssHeight = canvas.clientHeight || (window.innerHeight - 56);
+      const cssHeight = canvas.clientHeight || window.innerHeight;
       const width = Math.max(1, Math.floor(cssWidth * ratio));
       const height = Math.max(1, Math.floor(cssHeight * ratio));
       if (canvas.width !== width || canvas.height !== height) {
@@ -349,6 +355,72 @@
         if (typeof Module !== 'undefined' && typeof Module.setCanvasSize === 'function')
           Module.setCanvasSize(width, height, true);
       }
+    }
+
+    function scheduleCanvasResize() {
+      resizeCanvasToDisplaySize();
+      requestAnimationFrame(() => resizeCanvasToDisplaySize());
+      setTimeout(() => resizeCanvasToDisplaySize(), 120);
+    }
+
+    let fullscreenCaptureEnabled = false;
+    const blockedCtrlKeys = new Set([
+      '+', '-', '=', '0',
+      'w', 'r', 't', 'n', 'p', 's', 'o', 'l', 'f', 'g', 'h', 'j', 'k'
+    ]);
+
+    function isFullscreenActive() {
+      return !!document.fullscreenElement;
+    }
+
+    function fullscreenKeyHandler(e) {
+      if (!isFullscreenActive())
+        return;
+
+      const key = (e.key || '').toLowerCase();
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      if (ctrl && blockedCtrlKeys.has(key)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (e.code === 'F5' || key === 'f5') {
+        e.preventDefault();
+      }
+    }
+
+    function fullscreenWheelHandler(e) {
+      if (!isFullscreenActive())
+        return;
+      if (e.ctrlKey) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+
+    function fullscreenContextMenuHandler(e) {
+      if (!isFullscreenActive())
+        return;
+      e.preventDefault();
+    }
+
+    function enableFullscreenInputCapture() {
+      if (fullscreenCaptureEnabled)
+        return;
+      fullscreenCaptureEnabled = true;
+      document.addEventListener('keydown', fullscreenKeyHandler, true);
+      document.addEventListener('wheel', fullscreenWheelHandler, { capture: true, passive: false });
+      document.addEventListener('contextmenu', fullscreenContextMenuHandler, true);
+    }
+
+    function disableFullscreenInputCapture() {
+      if (!fullscreenCaptureEnabled)
+        return;
+      fullscreenCaptureEnabled = false;
+      document.removeEventListener('keydown', fullscreenKeyHandler, true);
+      document.removeEventListener('wheel', fullscreenWheelHandler, true);
+      document.removeEventListener('contextmenu', fullscreenContextMenuHandler, true);
     }
 
     function getFs() {
@@ -1018,7 +1090,8 @@
           if (!document.fullscreenElement) {
             document.documentElement.requestFullscreen().then(() => {
               document.body.classList.add('fullscreen');
-              resizeCanvasToDisplaySize();
+              scheduleCanvasResize();
+              enableFullscreenInputCapture();
               if (canvas) canvas.focus();
             }).catch((err) => {
               console.warn('[Web] Fullscreen request failed:', err);
@@ -1033,8 +1106,12 @@
         document.addEventListener('fullscreenchange', () => {
           if (!document.fullscreenElement) {
             document.body.classList.remove('fullscreen');
+            disableFullscreenInputCapture();
+          } else {
+            document.body.classList.add('fullscreen');
+            enableFullscreenInputCapture();
           }
-          resizeCanvasToDisplaySize();
+          scheduleCanvasResize();
         });
       }
 
@@ -1240,7 +1317,7 @@
       }
 
       window.addEventListener('resize', () => {
-        resizeCanvasToDisplaySize();
+        scheduleCanvasResize();
       });
 
       startBtn.addEventListener('click', async () => {
@@ -1262,6 +1339,17 @@
           writeBootConfig();
           setStatus('Starting...');
           resizeCanvasToDisplaySize();
+          if (canvas) {
+            // Ensure the gameplay area is what the user sees after Start.
+            requestAnimationFrame(() => {
+              try {
+                canvas.scrollIntoView({ block: 'start', inline: 'nearest' });
+              } catch (_) {
+                // Older browsers may not support the options object.
+                canvas.scrollIntoView(true);
+              }
+            });
+          }
           if (canvas) canvas.focus();
           if (typeof Module.callMain !== 'function') {
             console.error('[Web] Module.callMain missing', Module);

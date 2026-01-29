@@ -40,6 +40,9 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 
+dist-web/
+dist-web-pthreads/
+
 
 .vscode/
 

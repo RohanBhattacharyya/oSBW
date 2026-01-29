@@ -566,6 +566,14 @@ void UniverseServer::run() {
         Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", e.what());
         m_tcpState = TcpState::Fuck;
         tcpServer.reset();
+      } catch (std::exception const& e) {
+        Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", outputException(e, true));
+        m_tcpState = TcpState::Fuck;
+        tcpServer.reset();
+      } catch (...) {
+        Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: unknown exception");
+        m_tcpState = TcpState::Fuck;
+        tcpServer.reset();
       }
     } else if (m_tcpState == TcpState::No && tcpServer) {
       Logger::info("UniverseServer: Not listening for incoming TCP connections");
