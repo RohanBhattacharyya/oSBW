@@ -6,6 +6,11 @@
 #include "StarNetPackets.hpp"
 #include "StarZSTDCompression.hpp"
 #include "StarNetCompatibility.hpp"
+#include "StarEither.hpp"
+#include <atomic>
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+#include <emscripten/websocket.h>
+#endif
 
 namespace Star {
 
@@ -13,6 +18,9 @@ STAR_CLASS(PacketSocket);
 STAR_CLASS(LocalPacketSocket);
 STAR_CLASS(TcpPacketSocket);
 STAR_CLASS(P2PPacketSocket);
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+STAR_CLASS(WebSocketPacketSocket);
+#endif
 
 struct PacketStats {
   HashMap<PacketType, float> packetBytesPerSecond;
@@ -152,8 +160,8 @@ private:
   PacketStatCollector m_incomingStats;
   PacketStatCollector m_outgoingStats;
   ByteArray m_outputBuffer;
-  ByteArray m_inputBuffer;
   ByteArray m_compressedOutputBuffer;
+  ByteArray m_inputBuffer;
 };
 
 // Wraps a P2PSocket into a PacketSocket
@@ -185,5 +193,53 @@ private:
   Deque<ByteArray> m_outputMessages;
   Deque<ByteArray> m_inputMessages;
 };
+
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+// WebSocket-backed PacketSocket for web builds (WS/WSS via proxy).
+class WebSocketPacketSocket : public CompressedPacketSocket {
+public:
+  static Either<String, WebSocketPacketSocketUPtr> openWithTimeout(String const& url, uint64_t timeoutMs);
+
+  bool isOpen() const override;
+  void close() override;
+
+  void sendPackets(List<PacketPtr> packets) override;
+  List<PacketPtr> receivePackets() override;
+
+  bool sentPacketsPending() const override;
+
+  bool writeData() override;
+  bool readData() override;
+
+  Maybe<PacketStats> incomingStats() const override;
+  Maybe<PacketStats> outgoingStats() const override;
+
+private:
+  explicit WebSocketPacketSocket(String const& url);
+
+  bool waitForOpen(uint64_t timeoutMs);
+  void setFailed(String const& error);
+  void markOpen();
+  void handleClose(uint16_t code, bool clean);
+  void handleMessage(char const* data, size_t size, bool isText);
+
+  static EM_BOOL onOpen(int, const ::EmscriptenWebSocketOpenEvent*, void* userData);
+  static EM_BOOL onError(int, const ::EmscriptenWebSocketErrorEvent*, void* userData);
+  static EM_BOOL onClose(int, const ::EmscriptenWebSocketCloseEvent* e, void* userData);
+  static EM_BOOL onMessage(int, const ::EmscriptenWebSocketMessageEvent* e, void* userData);
+
+  String m_url;
+  std::atomic<bool> m_open{false};
+  std::atomic<bool> m_failed{false};
+  String m_failMessage;
+  ByteArray m_outputBuffer;
+  ByteArray m_compressedOutputBuffer;
+  ByteArray m_inputBuffer;
+  mutable Mutex m_mutex;
+  PacketStatCollector m_incomingStats;
+  PacketStatCollector m_outgoingStats;
+  void* m_wsHandle = nullptr;
+};
+#endif
 
 }

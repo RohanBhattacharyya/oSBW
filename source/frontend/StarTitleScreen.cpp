@@ -446,6 +446,13 @@ void TitleScreen::initMultiPlayerMenu() {
 
   readerConnect.construct(assets->json("/interface/windowconfig/multiplayer.config"), m_multiPlayerMenu.get());
 
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+  if (auto webHint = m_multiPlayerMenu->fetchChild<LabelWidget>("webHint")) {
+    webHint->setText("Web builds need a wss:// proxy URL (example: wss://your-domain/opensb)");
+    webHint->setVisibility(true);
+  }
+#endif
+
   populateServerList(serverList);
 
   m_paneManager.registerPane("multiplayerMenu", PaneLayer::Hud, m_multiPlayerMenu);

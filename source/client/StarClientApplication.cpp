@@ -44,6 +44,14 @@ extern "C" __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 1;
 
 namespace Star {
 
+static bool isWebSocketUrl(String const& address) {
+  return address.beginsWith("ws://") || address.beginsWith("wss://");
+}
+
+static bool isWebSocketBindAllHost(String const& address) {
+  return address.beginsWith("ws://0.0.0.0") || address.beginsWith("wss://0.0.0.0");
+}
+
 Json const AdditionalAssetsSettings = Json::parseJson(R"JSON(
     {
       "missingImage" : "/assetmissing.png",
@@ -373,7 +381,12 @@ void ClientApplication::update() {
   if (m_state >= MainAppState::Title) {
     if (auto p2pNetworkingService = app->p2pNetworkingService()) {
       if (auto join = p2pNetworkingService->pullPendingJoin()) {
-        m_pendingMultiPlayerConnection = PendingMultiPlayerConnection{join.takeValue(), {}, {}, false};
+        auto joinValue = join.takeValue();
+        if (auto address = joinValue.ptr<HostAddressWithPort>()) {
+          m_pendingMultiPlayerConnection = PendingMultiPlayerConnection{*address, {}, {}, false};
+        } else if (auto peerId = joinValue.ptr<P2PNetworkingPeerId>()) {
+          m_pendingMultiPlayerConnection = PendingMultiPlayerConnection{*peerId, {}, {}, false};
+        }
         changeState(MainAppState::Title);
       }
       
@@ -707,6 +720,12 @@ void ClientApplication::changeState(MainAppState newState) {
         m_titleScreen->setMultiPlayerAccount(configuration->getPath("title.multiPlayerAccount").toString());
         m_titleScreen->setMultiPlayerForceLegacy(configuration->getPath("title.multiPlayerForceLegacy").optBool().value(false));
         m_titleScreen->goToMultiPlayerSelectCharacter(false);
+      } else if (auto wsAddress = m_pendingMultiPlayerConnection->server.ptr<PendingMultiPlayerConnection::WebSocketAddress>()) {
+        m_titleScreen->setMultiPlayerAddress(wsAddress->url);
+        m_titleScreen->setMultiPlayerPort("");
+        m_titleScreen->setMultiPlayerAccount(configuration->getPath("title.multiPlayerAccount").toString());
+        m_titleScreen->setMultiPlayerForceLegacy(configuration->getPath("title.multiPlayerForceLegacy").optBool().value(false));
+        m_titleScreen->goToMultiPlayerSelectCharacter(false);
       } else {
         m_titleScreen->goToMultiPlayerSelectCharacter(true);
       }
@@ -759,6 +778,20 @@ void ClientApplication::changeState(MainAppState newState) {
           setError(strf("Join failed! Error connecting to '{}'", *address), e);
           return;
         }
+
+      } else if (auto wsAddress = multiPlayerConnection.server.ptr<PendingMultiPlayerConnection::WebSocketAddress>()) {
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+        auto timeout = m_root->assets()->json("/client.config:serverConnectTimeout").toUInt();
+        auto socketResult = WebSocketPacketSocket::openWithTimeout(wsAddress->url, timeout);
+        if (socketResult.isLeft()) {
+          setError(strf("Join failed! {}\nIf the page is https, you must use wss://.\nDo not use 0.0.0.0; use localhost or the server host.", socketResult.left()));
+          return;
+        }
+        packetSocket = std::move(socketResult.right());
+#else
+        setError("WebSocket URLs are only supported in web builds. Use a standard server address instead.");
+        return;
+#endif
 
       } else {
         auto p2pPeerId = multiPlayerConnection.server.ptr<P2PNetworkingPeerId>();
@@ -1006,9 +1039,34 @@ void ClientApplication::updateTitle(float dt) {
     changeState(MainAppState::SinglePlayer);
 
   } else if (m_titleScreen->currentState() == TitleState::StartMultiPlayer) {
-    if (!m_pendingMultiPlayerConnection || m_pendingMultiPlayerConnection->server.is<HostAddressWithPort>()) {
+    if (!m_pendingMultiPlayerConnection || m_pendingMultiPlayerConnection->server.is<HostAddressWithPort>()
+        || m_pendingMultiPlayerConnection->server.is<PendingMultiPlayerConnection::WebSocketAddress>()) {
       auto addressString = m_titleScreen->multiPlayerAddress().trim();
       auto portString = m_titleScreen->multiPlayerPort().trim();
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+      if (isWebSocketUrl(addressString)) {
+        if (isWebSocketBindAllHost(addressString)) {
+          setError("Join failed! 0.0.0.0 is a bind address and cannot be used by clients.\nUse ws://localhost:8080/opensb (local) or ws://<host>:8080/opensb.\nIf the page is https, use wss:// instead.");
+          return;
+        }
+        m_pendingMultiPlayerConnection = PendingMultiPlayerConnection{
+          PendingMultiPlayerConnection::WebSocketAddress{addressString},
+          m_titleScreen->multiPlayerAccount(),
+          m_titleScreen->multiPlayerPassword(),
+          m_titleScreen->multiPlayerForceLegacy()
+        };
+
+        auto configuration = m_root->configuration();
+        configuration->setPath("title.multiPlayerAddress", m_titleScreen->multiPlayerAddress());
+        configuration->setPath("title.multiPlayerPort", "");
+        configuration->setPath("title.multiPlayerAccount", m_titleScreen->multiPlayerAccount());
+        configuration->setPath("title.multiPlayerForceLegacy", m_titleScreen->multiPlayerForceLegacy());
+
+        changeState(MainAppState::MultiPlayer);
+      } else {
+        setError("Web builds require a WebSocket proxy. Enter a ws:// or wss:// URL for your proxy (for example: wss://your-domain/opensb).\nIf the page is https, you must use wss://.\nDesktop servers can still be joined from desktop clients directly.");
+      }
+#else
       portString = portString.empty() ? toString(m_root->configuration()->get("gameServerPort").toUInt()) : portString;
       if (auto port = maybeLexicalCast<uint16_t>(portString)) {
         auto address = HostAddressWithPort::lookup(addressString, *port);
@@ -1033,6 +1091,7 @@ void ClientApplication::updateTitle(float dt) {
       } else {
         setError(strf("invalid port: {}", portString));
       }
+#endif
     } else {
       changeState(MainAppState::MultiPlayer);
     }

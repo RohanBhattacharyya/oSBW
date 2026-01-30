@@ -113,13 +113,24 @@ Maybe<String> UniverseClient::connect(UniverseConnection connection, bool allowA
           return String(strf("Join failed! Unknown net stream connection type '{}'", compressionName));
 
         Logger::info("UniverseClient: Using '{}' network stream compression", NetCompressionModeNames.getRight(*compressionMode));
-        compressedSocket->setCompressionStreamEnabled(compressionMode == NetCompressionMode::Zstd);
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+        if (*compressionMode == NetCompressionMode::Zstd) {
+          return String("Join failed! Server requires Zstd network stream compression, which is not supported in web builds.\nSet server 'connectionSettings.compression' to 'None'.");
+        }
+        compressedSocket->setCompressionStreamEnabled(false);
+#else
+        compressedSocket->setCompressionStreamEnabled(*compressionMode == NetCompressionMode::Zstd);
+#endif
       }
     } else {
       compatibilityRules.setVersion(1); // A version of 1 is OpenStarbound prior to the NetElement compatibility stuff
       if (compressedSocket) {
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+        return String("Join failed! Server requires Zstd network stream compression, which is not supported in web builds.\nUpdate the server and set 'connectionSettings.compression' to 'None'.");
+#else
         Logger::info("UniverseClient: Defaulting to Zstd network stream compression (older server version)");
         compressedSocket->setCompressionStreamEnabled(true);
+#endif
       }
     }
   }

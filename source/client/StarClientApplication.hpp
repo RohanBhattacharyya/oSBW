@@ -56,7 +56,11 @@ private:
   };
 
   struct PendingMultiPlayerConnection {
-    Variant<P2PNetworkingPeerId, HostAddressWithPort> server;
+    struct WebSocketAddress {
+      String url;
+    };
+
+    Variant<P2PNetworkingPeerId, HostAddressWithPort, WebSocketAddress> server;
     String account;
     String password;
     bool forceLegacy;

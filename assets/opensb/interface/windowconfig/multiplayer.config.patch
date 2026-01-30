@@ -24,5 +24,15 @@
     "checkable" : true,
     "checked": false
   },
+  "webHint" : {
+    "type" : "label",
+    "position" : [20, 18],
+    "hAnchor" : "left",
+    "fontSize" : 8,
+    "wrapWidth" : 200,
+    "color" : [200, 200, 200],
+    "value" : "",
+    "visible" : false
+  },
   "password" : { "hidden" : true }
 }

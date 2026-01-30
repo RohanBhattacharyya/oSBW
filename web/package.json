@@ -1,0 +1,13 @@
+{
+  "name": "opensb-wss-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenStarbound WebSocket proxy for web clients",
+  "license": "MIT",
+  "bin": {
+    "opensb-wss-proxy": "./opensb_wss_proxy.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

@@ -2,6 +2,9 @@
 #include "StarIterator.hpp"
 #include "StarCompression.hpp"
 #include "StarLogging.hpp"
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+#include <emscripten/websocket.h>
+#endif
 
 namespace Star {
 
@@ -505,5 +508,297 @@ Maybe<PacketStats> P2PPacketSocket::outgoingStats() const {
 
 P2PPacketSocket::P2PPacketSocket(P2PSocketPtr socket)
   : m_socket(std::move(socket)) {}
+
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+namespace {
+  constexpr size_t WebSocketSendChunk = 64 * 1024;
+}
+
+Either<String, WebSocketPacketSocketUPtr> WebSocketPacketSocket::openWithTimeout(String const& url, uint64_t timeoutMs) {
+  if (!emscripten_websocket_is_supported())
+    return makeLeft(String("WebSocket API not supported in this browser"));
+
+  WebSocketPacketSocketUPtr socket(new WebSocketPacketSocket(url));
+  if (!socket->waitForOpen(timeoutMs))
+    return makeLeft(socket->m_failMessage.empty() ? String("WebSocket connection failed") : socket->m_failMessage);
+
+  return makeRight(std::move(socket));
+}
+
+WebSocketPacketSocket::WebSocketPacketSocket(String const& url) : m_url(url) {
+  EmscriptenWebSocketCreateAttributes attr;
+  emscripten_websocket_init_create_attributes(&attr);
+  attr.url = m_url.utf8Ptr();
+  attr.protocols = nullptr;
+  attr.createOnMainThread = 1;
+
+  auto handle = emscripten_websocket_new(&attr);
+  if (handle <= 0) {
+    setFailed("Failed to create WebSocket");
+    return;
+  }
+  m_wsHandle = reinterpret_cast<void*>(handle);
+
+#ifdef EMSCRIPTEN_WEBSOCKET_BINARY_TYPE_ARRAYBUFFER
+  emscripten_websocket_set_binary_type(handle, EMSCRIPTEN_WEBSOCKET_BINARY_TYPE_ARRAYBUFFER);
+#endif
+  emscripten_websocket_set_onopen_callback(handle, this, WebSocketPacketSocket::onOpen);
+  emscripten_websocket_set_onerror_callback(handle, this, WebSocketPacketSocket::onError);
+  emscripten_websocket_set_onclose_callback(handle, this, WebSocketPacketSocket::onClose);
+  emscripten_websocket_set_onmessage_callback(handle, this, WebSocketPacketSocket::onMessage);
+}
+
+bool WebSocketPacketSocket::waitForOpen(uint64_t timeoutMs) {
+  auto start = Time::monotonicMilliseconds();
+  while (!m_open.load() && !m_failed.load()) {
+    if (timeoutMs && (Time::monotonicMilliseconds() - start) > timeoutMs)
+      break;
+    Thread::sleep(5);
+  }
+  return m_open.load() && !m_failed.load();
+}
+
+void WebSocketPacketSocket::setFailed(String const& error) {
+  m_failed.store(true);
+  if (m_failMessage.empty())
+    m_failMessage = error;
+}
+
+void WebSocketPacketSocket::markOpen() {
+  m_open.store(true);
+}
+
+void WebSocketPacketSocket::handleClose(uint16_t code, bool clean) {
+  String reason = strf("WebSocket closed (code {}{})", code, clean ? ", clean" : "");
+  setFailed(reason);
+}
+
+void WebSocketPacketSocket::handleMessage(char const* data, size_t size, bool isText) {
+  if (isText || !data || size == 0)
+    return;
+  MutexLocker locker(m_mutex);
+  m_incomingStats.mix(size);
+  if (compressionStreamEnabled())
+    m_decompressionStream.decompress(data, size, m_inputBuffer);
+  else
+    m_inputBuffer.append(data, size);
+}
+
+EM_BOOL WebSocketPacketSocket::onOpen(int, const EmscriptenWebSocketOpenEvent*, void* userData) {
+  auto socket = static_cast<WebSocketPacketSocket*>(userData);
+  socket->markOpen();
+  return EM_TRUE;
+}
+
+EM_BOOL WebSocketPacketSocket::onError(int, const EmscriptenWebSocketErrorEvent*, void* userData) {
+  auto socket = static_cast<WebSocketPacketSocket*>(userData);
+  socket->setFailed("WebSocket error");
+  return EM_TRUE;
+}
+
+EM_BOOL WebSocketPacketSocket::onClose(int, const EmscriptenWebSocketCloseEvent* e, void* userData) {
+  auto socket = static_cast<WebSocketPacketSocket*>(userData);
+  socket->handleClose(e->code, e->wasClean);
+  return EM_TRUE;
+}
+
+EM_BOOL WebSocketPacketSocket::onMessage(int, const EmscriptenWebSocketMessageEvent* e, void* userData) {
+  auto socket = static_cast<WebSocketPacketSocket*>(userData);
+  socket->handleMessage((char const*)e->data, e->numBytes, e->isText);
+  return EM_TRUE;
+}
+
+bool WebSocketPacketSocket::isOpen() const {
+  return m_open.load() && !m_failed.load();
+}
+
+void WebSocketPacketSocket::close() {
+  if (m_wsHandle) {
+    auto handle = reinterpret_cast<EMSCRIPTEN_WEBSOCKET_T>(m_wsHandle);
+    emscripten_websocket_close(handle, 1000, "");
+    emscripten_websocket_delete(handle);
+  }
+  m_wsHandle = nullptr;
+  m_open.store(false);
+}
+
+void WebSocketPacketSocket::sendPackets(List<PacketPtr> packets) {
+  if (packets.empty())
+    return;
+
+  auto it = makeSMutableIterator(packets);
+  if (compressionStreamEnabled()) {
+    DataStreamBuffer outBuffer;
+    while (it.hasNext()) {
+      PacketPtr& packet = it.next();
+      auto packetType = packet->type();
+      DataStreamBuffer packetBuffer;
+      packetBuffer.setStreamCompatibilityVersion(netRules());
+      packet->write(packetBuffer, netRules());
+      outBuffer.write(packetType);
+      outBuffer.writeVlqI((int)packetBuffer.size());
+      outBuffer.writeData(packetBuffer.ptr(), packetBuffer.size());
+      m_outgoingStats.mix(packetType, packetBuffer.size(), false);
+    }
+    MutexLocker locker(m_mutex);
+    m_outputBuffer.append(outBuffer.ptr(), outBuffer.size());
+  } else {
+    while (it.hasNext()) {
+      PacketType currentType = it.peekNext()->type();
+      PacketCompressionMode currentCompressionMode = it.peekNext()->compressionMode();
+
+      DataStreamBuffer packetBuffer;
+      packetBuffer.setStreamCompatibilityVersion(netRules());
+      while (it.hasNext()
+             && it.peekNext()->type() == currentType
+             && it.peekNext()->compressionMode() == currentCompressionMode) {
+          it.next()->write(packetBuffer, netRules());
+      }
+
+      starAssert(!packetBuffer.empty());
+
+      ByteArray compressedPackets;
+      bool mustCompress = currentCompressionMode == PacketCompressionMode::Enabled;
+      bool perhapsCompress = currentCompressionMode == PacketCompressionMode::Automatic && packetBuffer.size() > 64;
+      if (mustCompress || perhapsCompress)
+        compressedPackets = compressData(packetBuffer.data());
+
+      DataStreamBuffer outBuffer;
+      outBuffer.write(currentType);
+
+      if (!compressedPackets.empty() && (mustCompress || compressedPackets.size() < packetBuffer.size())) {
+        outBuffer.writeVlqI(-(int)(compressedPackets.size()));
+        outBuffer.writeData(compressedPackets.ptr(), compressedPackets.size());
+        m_outgoingStats.mix(currentType, compressedPackets.size());
+      } else {
+        outBuffer.writeVlqI((int)(packetBuffer.size()));
+        outBuffer.writeData(packetBuffer.ptr(), packetBuffer.size());
+        m_outgoingStats.mix(currentType, packetBuffer.size());
+      }
+
+      MutexLocker locker(m_mutex);
+      m_outputBuffer.append(outBuffer.takeData());
+    }
+  }
+}
+
+List<PacketPtr> WebSocketPacketSocket::receivePackets() {
+  uint64_t const PacketSizeLimit = 64 << 20;
+  uint64_t const PacketBatchLimit = 131072;
+  List<PacketPtr> packets;
+  try {
+    MutexLocker locker(m_mutex);
+    DataStreamExternalBuffer ds(m_inputBuffer);
+    size_t trimPos = 0;
+    while (!ds.atEnd()) {
+      PacketType packetType;
+      uint64_t packetSize = 0;
+      bool packetCompressed = false;
+
+      try {
+        packetType = ds.read<PacketType>();
+        int64_t len = ds.readVlqI();
+        packetCompressed = len < 0;
+        packetSize = packetCompressed ? -len : len;
+      } catch (EofException const&) {
+        break;
+      }
+
+      if (packetSize > PacketSizeLimit)
+        throw IOException::format("{} bytes large {} exceeds max size!", packetSize, PacketTypeNames.getRight(packetType));
+
+      if (packetSize > ds.remaining())
+        break;
+
+      m_incomingStats.mix(packetType, packetSize, !compressionStreamEnabled());
+
+      DataStreamExternalBuffer packetStream(ds.ptr() + ds.pos(), packetSize);
+      packetStream.setStreamCompatibilityVersion(netRules());
+      ByteArray uncompressed;
+      if (packetCompressed) {
+        uncompressed = uncompressData(packetStream.ptr(), packetSize, PacketSizeLimit);
+        packetStream.reset(uncompressed.ptr(), uncompressed.size());
+      }
+      ds.seek(packetSize, IOSeek::Relative);
+      trimPos = ds.pos();
+
+      size_t count = 0;
+      do {
+        if (++count > PacketBatchLimit) {
+          throw IOException::format("Packet batch limit {} reached while reading {}s!", PacketBatchLimit, PacketTypeNames.getRight(packetType));
+        }
+        PacketPtr packet = createPacket(packetType);
+        packet->setCompressionMode(packetCompressed ? PacketCompressionMode::Enabled : PacketCompressionMode::Disabled);
+        packet->read(packetStream, netRules());
+        packets.append(std::move(packet));
+      } while (!packetStream.atEnd());
+    }
+
+    if (trimPos)
+      m_inputBuffer.trimLeft(trimPos);
+  } catch (IOException const& e) {
+    Logger::warn("I/O error in WebSocketPacketSocket::receivePackets, closing: {}", outputException(e, false));
+    m_inputBuffer.clear();
+    close();
+  }
+  return packets;
+}
+
+bool WebSocketPacketSocket::sentPacketsPending() const {
+  MutexLocker locker(m_mutex);
+  return !m_outputBuffer.empty() || (compressionStreamEnabled() && !m_compressedOutputBuffer.empty());
+}
+
+bool WebSocketPacketSocket::writeData() {
+  if (!isOpen() || !m_wsHandle)
+    return false;
+
+  auto handle = reinterpret_cast<EMSCRIPTEN_WEBSOCKET_T>(m_wsHandle);
+  bool dataSent = false;
+  MutexLocker locker(m_mutex);
+
+  if (compressionStreamEnabled()) {
+    if (!m_outputBuffer.empty()) {
+      m_compressionStream.compress(m_outputBuffer, m_compressedOutputBuffer);
+      m_outputBuffer.clear();
+    }
+
+    while (!m_compressedOutputBuffer.empty()) {
+      size_t sendSize = std::min(WebSocketSendChunk, m_compressedOutputBuffer.size());
+      auto result = emscripten_websocket_send_binary(handle, m_compressedOutputBuffer.ptr(), sendSize);
+      if (result != EMSCRIPTEN_RESULT_SUCCESS)
+        break;
+      m_compressedOutputBuffer.trimLeft(sendSize);
+      m_outgoingStats.mix(sendSize);
+      dataSent = true;
+    }
+  } else {
+    while (!m_outputBuffer.empty()) {
+      size_t sendSize = std::min(WebSocketSendChunk, m_outputBuffer.size());
+      auto result = emscripten_websocket_send_binary(handle, m_outputBuffer.ptr(), sendSize);
+      if (result != EMSCRIPTEN_RESULT_SUCCESS)
+        break;
+      m_outputBuffer.trimLeft(sendSize);
+      m_outgoingStats.mix(sendSize);
+      dataSent = true;
+    }
+  }
+
+  return dataSent;
+}
+
+bool WebSocketPacketSocket::readData() {
+  MutexLocker locker(m_mutex);
+  return !m_inputBuffer.empty();
+}
+
+Maybe<PacketStats> WebSocketPacketSocket::incomingStats() const {
+  return m_incomingStats.stats();
+}
+
+Maybe<PacketStats> WebSocketPacketSocket::outgoingStats() const {
+  return m_outgoingStats.stats();
+}
+#endif
 
 }

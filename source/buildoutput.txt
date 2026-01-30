@@ -1,0 +1,137 @@
+[0/2] Re-checking globbed directories...
+[1/6] Building CXX object game/CMakeFiles/star_game.dir/StarUniverseClient.cpp.o
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.cpp:1:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarMaybe.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarException.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarOutputProxy.hpp:5:
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:2748:23: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 2748 |   constexpr T inf = T(std::numeric_limits<double>::infinity());
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:2755:13: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 2755 |   T inf = T(std::numeric_limits<double>::infinity());
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:2748:23: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 2748 |   constexpr T inf = T(std::numeric_limits<double>::infinity());
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:3599:16: note: in instantiation of function template specialization 'fmt::detail::isfinite<double, 0>' requested here
+ 3599 |   if (!detail::isfinite(value))
+      |                ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:3642:16: note: in instantiation of function template specialization 'fmt::detail::write_float<char, fmt::appender, double>' requested here
+ 3642 |              : write_float(out, value, specs, loc);
+      |                ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:3648:39: note: in instantiation of function template specialization 'fmt::detail::write<char, fmt::appender, double, 0>' requested here
+ 3648 |   if (is_constant_evaluated()) return write(out, value, format_specs<Char>());
+      |                                       ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:4321:11: note: in instantiation of function template specialization 'fmt::detail::write<char, fmt::appender, double, 0>' requested here
+ 4321 |   detail::write<char>(appender(buffer), value);
+      |           ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarFormat.hpp:44:15: note: in instantiation of function template specialization 'fmt::to_string<double, 0>' requested here
+   44 |   return fmt::to_string(t);
+      |               ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarLua.hpp:857:21: note: in instantiation of function template specialization 'Star::toString<double>' requested here
+  857 |       return String(toString(v.get<LuaFloat>()));
+      |                     ^
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.cpp:1:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarMaybe.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarException.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarOutputProxy.hpp:5:
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:2748:23: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 2748 |   constexpr T inf = T(std::numeric_limits<double>::infinity());
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:3599:16: note: in instantiation of function template specialization 'fmt::detail::isfinite<float, 0>' requested here
+ 3599 |   if (!detail::isfinite(value))
+      |                ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:3642:16: note: in instantiation of function template specialization 'fmt::detail::write_float<char, fmt::appender, float>' requested here
+ 3642 |              : write_float(out, value, specs, loc);
+      |                ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/format.h:4516:20: note: in instantiation of function template specialization 'fmt::detail::write<char, fmt::appender, float, 0>' requested here
+ 4516 |     return detail::write<Char>(ctx.out(), val, specs_, ctx.locale());
+      |                    ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/ranges.h:551:24: note: in instantiation of function template specialization 'fmt::range_formatter<float, char>::format<const Star::Vector<float, 2> &, fmt::basic_format_context<fmt::appender, char>>' requested here
+  551 |     return underlying_.format(range, ctx);
+      |                        ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/core.h:1328:22: note: in instantiation of function template specialization 'fmt::detail::range_default_formatter<fmt::range_format::sequence, Star::Vector<float, 2>, char>::format<fmt::basic_format_context<fmt::appender, char>>' requested here
+ 1328 |     ctx.advance_to(f.format(*static_cast<qualified_type*>(arg), ctx));
+      |                      ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/core.h:1310:21: note: in instantiation of function template specialization 'fmt::detail::value<fmt::basic_format_context<fmt::appender, char>>::format_custom_arg<Star::Vector<float, 2>, fmt::formatter<Star::Vector<float, 2>>>' requested here
+ 1310 |     custom.format = format_custom_arg<
+      |                     ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fmt/core.h:1607:10: note: in instantiation of function template specialization 'fmt::detail::value<fmt::basic_format_context<fmt::appender, char>>::value<const Star::Vector<float, 2>>' requested here
+ 1607 |   return {arg_mapper<Context>().map(val)};
+      |          ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarFormat.hpp:17:21: note: in instantiation of function template specialization 'fmt::format<const Star::Vector<float, 2> &, const Star::Maybe<Star::Vector<float, 2>> &>' requested here
+   17 |   try { return fmt::format(fmt, args...); }
+      |                     ^
+/home/rohan/Documents/Code/OpenStarbound/source/game/StarPlatformerAStarTypes.hpp:100:16: note: in instantiation of function template specialization 'Star::strf<const Star::Vector<float, 2> &, const Star::Maybe<Star::Vector<float, 2>> &>' requested here
+  100 |   return os << strf("Node{position = {}, velocity = {}}", node.position, node.velocity);
+      |                ^
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.cpp:1:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.hpp:11:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseConnection.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarNetPacketSocket.hpp:6:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarNetPackets.hpp:15:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarClientContext.hpp:9:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarWorldStorage.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarVersioningDatabase.hpp:7:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/scripting/StarLuaRoot.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarLua.hpp:7:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarLexicalCast.hpp:8:
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fast_float.h:3633:28: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 3633 |       value = minusSign ? -std::numeric_limits<T>::infinity()
+      |                            ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fast_float.h:3882:22: note: in instantiation of function template specialization 'fast_float::detail::parse_infnan<double, char>' requested here
+ 3882 |       return detail::parse_infnan(first, last, value);
+      |                      ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fast_float.h:3714:12: note: in instantiation of function template specialization 'fast_float::from_chars_advanced<double, char>' requested here
+ 3714 |     return from_chars_advanced(first, last, value, options);
+      |            ^
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fast_float.h:3756:32: note: in instantiation of function template specialization 'fast_float::from_chars_caller<double>::call<char>' requested here
+ 3756 |   return from_chars_caller<T>::call(first, last, value,
+      |                                ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarLexicalCast.hpp:18:26: note: in instantiation of function template specialization 'fast_float::from_chars<double, char, int>' requested here
+   18 |   auto res = fast_float::from_chars(first, last, result);
+      |                          ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarLexicalCast.hpp:38:7: note: in instantiation of function template specialization 'Star::tryLexicalCast<double>' requested here
+   38 |   if (tryLexicalCast(result, first, last))
+      |       ^
+/home/rohan/Documents/Code/OpenStarbound/source/core/StarLexicalCast.hpp:46:10: note: (skipping 13 contexts in backtrace; use -ftemplate-backtrace-limit=0 to see all)
+   46 |   return maybeLexicalCast<Type>(s.utf8Ptr(), s.utf8Ptr() + s.utf8Size());
+      |          ^
+/home/rohan/.cache/emscripten/sysroot/include/c++/v1/__memory/allocator_traits.h:296:9: note: in instantiation of function template specialization 'std::allocator<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>::construct<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>' requested here
+  296 |     __a.construct(__p, std::forward<_Args>(__args)...);
+      |         ^
+/home/rohan/.cache/emscripten/sysroot/include/c++/v1/__memory/shared_ptr.h:162:33: note: in instantiation of function template specialization 'std::allocator_traits<std::allocator<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>>::construct<Star::LuaUpdatableComponent<Star::LuaBaseComponent>, 0>' requested here
+  162 |     allocator_traits<_TpAlloc>::construct(__tmp, __get_elem(), std::forward<_Args>(__args)...);
+      |                                 ^
+/home/rohan/.cache/emscripten/sysroot/include/c++/v1/__memory/shared_ptr.h:736:51: note: in instantiation of function template specialization 'std::__shared_ptr_emplace<Star::LuaUpdatableComponent<Star::LuaBaseComponent>, std::allocator<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>>::__shared_ptr_emplace<std::allocator<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>, 0>' requested here
+  736 |   ::new ((void*)std::addressof(*__guard.__get())) _ControlBlock(__a, std::forward<_Args>(__args)...);
+      |                                                   ^
+/home/rohan/.cache/emscripten/sysroot/include/c++/v1/__memory/shared_ptr.h:744:15: note: in instantiation of function template specialization 'std::allocate_shared<Star::LuaUpdatableComponent<Star::LuaBaseComponent>, std::allocator<Star::LuaUpdatableComponent<Star::LuaBaseComponent>>, 0>' requested here
+  744 |   return std::allocate_shared<_Tp>(allocator<__remove_cv_t<_Tp> >(), std::forward<_Args>(__args)...);
+      |               ^
+/home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.cpp:562:28: note: in instantiation of function template specialization 'std::make_shared<Star::LuaUpdatableComponent<Star::LuaBaseComponent>, 0>' requested here
+  562 |     auto scriptComponent = make_shared<ScriptComponent>();
+      |                            ^
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.cpp:1:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseClient.hpp:11:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarUniverseConnection.hpp:3:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarNetPacketSocket.hpp:6:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarNetPackets.hpp:15:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarClientContext.hpp:9:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarWorldStorage.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/StarVersioningDatabase.hpp:7:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/game/scripting/StarLuaRoot.hpp:4:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarLua.hpp:7:
+In file included from /home/rohan/Documents/Code/OpenStarbound/source/core/StarLexicalCast.hpp:8:
+/home/rohan/Documents/Code/OpenStarbound/source/extern/fast_float.h:3634:27: warning: use of infinity is undefined behavior due to the currently enabled floating-point options [-Wnan-infinity-disabled]
+ 3634 |                         : std::numeric_limits<T>::infinity();
+      |                           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+6 warnings generated.
+[2/6] Linking CXX executable /home/rohan/Documents/Code/OpenStarbound/dist-web-pthreads/make_versioned_json.js
+[3/6] Linking CXX executable /home/rohan/Documents/Code/OpenStarbound/dist-web-pthreads/dump_versioned_json.js
+[4/6] Linking CXX executable /home/rohan/Documents/Code/OpenStarbound/dist-web-pthreads/starbound_server.js
+[5/6] Linking CXX executable /home/rohan/Documents/Code/OpenStarbound/dist-web-pthreads/starbound.html; Copy preload.config into web output; Patch starbound.js PACKAGE_NAME to be relative
+em++: warning: -pthread + ALLOW_MEMORY_GROWTH may run non-wasm code slowly, see https://github.com/WebAssembly/design/issues/1271 [-Wpthreads-mem-growth]
+[patch_package_name] Patched generated JS in /home/rohan/Documents/Code/OpenStarbound/dist-web-pthreads/starbound.js
