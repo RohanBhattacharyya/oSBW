@@ -188,6 +188,17 @@ public:
   bool isMaster() const;
   bool isSlave() const;
 
+  // Performance: Mark entity as needing spatial hash update when position changes
+  void checkPositionChanged() const {
+    Vec2F currentPos = position();
+    if (currentPos != m_lastSpatialPosition) {
+      m_spatialDirty = true;
+      m_lastSpatialPosition = currentPos;
+    }
+  }
+  bool spatialDirty() const { return m_spatialDirty; }
+  void clearSpatialDirty() const { m_spatialDirty = false; }
+
 protected:
   Entity();
 
@@ -204,6 +215,10 @@ private:
   Maybe<String> m_uniqueId;
   World* m_world;
   EntityDamageTeam m_team;
+  
+  // Performance: Dirty flag for spatial hash updates - only update when entity moves
+  mutable bool m_spatialDirty = true;
+  mutable Vec2F m_lastSpatialPosition;
 };
 
 template <typename EntityT>

@@ -1,0 +1,26 @@
+{
+  "performance" : {
+    "maxLightRange" : 80.0,
+    
+    "scriptDistanceThresholds" : {
+      "close" : 20.0,
+      "medium" : 50.0,
+      "far" : 100.0
+    },
+    
+    "scriptDeltaMultipliers" : {
+      "close" : 1,
+      "medium" : 2,
+      "far" : 4,
+      "distant" : 8
+    },
+    
+    "frustumCullingBuffer" : 2.0,
+    
+    "spatialHashUpdateThreshold" : 0.5,
+    
+    "dungeonDefinitionCacheSize" : 200
+  },
+  
+  "chunkCacheTimeout" : 30000
+}

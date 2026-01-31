@@ -93,6 +93,13 @@ void EntityMap::updateAllEntities(EntityCallback const& callback, function<bool(
   auto updateEntityInfo = [&](SpatialMap::Entry const& entry) {
     auto const& entity = entry.value;
 
+    // Performance: Check if entity position has changed
+    entity->checkPositionChanged();
+    
+    // Performance: Only update spatial hash when entity has moved
+    if (!entity->spatialDirty())
+      return;
+
     auto position = entity->position();
     auto boundBox = entity->metaBoundBox();
 
@@ -121,6 +128,8 @@ void EntityMap::updateAllEntities(EntityCallback const& callback, function<bool(
     } else {
       m_uniqueMap.removeRight(entityId);
     }
+
+    entity->clearSpatialDirty();
   };
 
   // Even if there is no sort order, we still copy pointers to a temporary

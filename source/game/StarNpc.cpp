@@ -2,6 +2,7 @@
 #include "StarDataStreamExtra.hpp"
 #include "StarWorld.hpp"
 #include "StarRoot.hpp"
+#include "StarPlayer.hpp"
 #include "StarSongbook.hpp"
 #include "StarSongbookLuaBindings.hpp"
 #include "StarDamageManager.hpp"
@@ -406,6 +407,20 @@ void Npc::update(float dt, uint64_t) {
   m_movementController->setTimestep(dt);
 
   if (isMaster()) {
+    // Performance: Adaptive script update rates for NPCs
+    // Reduce script execution frequency when no players are nearby
+    auto nearbyPlayers = world()->query<Player>(RectF::withCenter(position(), Vec2F::filled(60.0f)));
+    bool playerNearby = !nearbyPlayers.empty();
+    bool isMoving = m_movementController->velocity().magnitudeSquared() > 1.0f;
+    bool isTalking = !m_chatMessage.get().empty();
+    
+    // Adjust script delta based on activity state
+    if (playerNearby || isMoving || isTalking) {
+      m_scriptComponent.setUpdateDelta(m_npcVariant.initialScriptDelta);  // Full rate when active
+    } else {
+      m_scriptComponent.setUpdateDelta(max(6u, m_npcVariant.initialScriptDelta * 3));  // Low rate when no players nearby
+    }
+
     m_scriptComponent.update(m_scriptComponent.updateDt(dt));
 
     if (inConflictingLoungeAnchor())

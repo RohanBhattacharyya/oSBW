@@ -13,7 +13,8 @@
 
 namespace Star {
 
-size_t const DefinitionsCacheSize = 20;
+// Increased from 20 to 200 for better cache hit rate during world generation
+size_t const DefinitionsCacheSize = 200;
 
 namespace Dungeon {
 

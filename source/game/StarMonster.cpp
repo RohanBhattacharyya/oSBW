@@ -2,6 +2,7 @@
 #include "StarWorld.hpp"
 #include "StarLogging.hpp"
 #include "StarRoot.hpp"
+#include "StarPlayer.hpp"
 #include "StarDamageManager.hpp"
 #include "StarDamageDatabase.hpp"
 #include "StarTreasure.hpp"
@@ -457,6 +458,22 @@ void Monster::update(float dt, uint64_t) {
     if (m_knockedOut) {
       m_knockoutTimer -= dt;
     } else {
+      // Performance: Adaptive script update rates
+      // Reduce script execution frequency when no players are nearby
+      auto nearbyPlayers = world()->query<Player>(RectF::withCenter(position(), Vec2F::filled(50.0f)));
+      bool playerNearby = !nearbyPlayers.empty();
+      bool isMoving = m_movementController->velocity().magnitudeSquared() > 1.0f;
+      bool inCombat = m_aggressive && playerNearby;
+      
+      // Adjust script delta based on activity state
+      if (inCombat || isMoving) {
+        m_scriptComponent.setUpdateDelta(m_monsterVariant.initialScriptDelta);  // Full rate when active
+      } else if (playerNearby) {
+        m_scriptComponent.setUpdateDelta(max(2u, m_monsterVariant.initialScriptDelta));  // Half rate when player nearby but idle
+      } else {
+        m_scriptComponent.setUpdateDelta(max(6u, m_monsterVariant.initialScriptDelta * 3));  // Low rate when no players nearby
+      }
+
       if (m_scriptComponent.updateReady())
         m_physicsForces.set({});
       m_scriptComponent.update(m_scriptComponent.updateDt(dt));

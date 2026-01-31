@@ -538,8 +538,25 @@ void WorldClient::render(WorldRenderData& renderData, unsigned bufferTiles) {
       if (auto& globalDirectives = parameters->globalDirectives)
         directives = &globalDirectives.get();
   }
+
+  // Performance: Calculate expanded render frustum for entity culling
+  RectF renderFrustum = RectF(window).padded(bufferTiles * 2.0f);
+  Vec2F cameraCenter = m_clientState.windowCenter();
+
   m_entityMap->forAllEntities([&](EntityPtr const& entity) {
       if (m_startupHiddenEntities.contains(entity->entityId()))
+        return;
+
+      // Performance: View frustum culling - skip entities outside the expanded render area
+      RectF entityBounds = entity->metaBoundBox().translated(entity->position());
+      bool inFrustum = false;
+      for (auto const& rect : m_geometry.splitRect(renderFrustum)) {
+        if (rect.intersects(entityBounds)) {
+          inFrustum = true;
+          break;
+        }
+      }
+      if (!inFrustum)
         return;
 
       ClientRenderCallback renderCallback;
@@ -1739,18 +1756,32 @@ void WorldClient::lightingCalc() {
   List<LightSource> lights = std::move(m_pendingLights);
   List<std::pair<Vec2F, Vec3F>> particleLights = std::move(m_pendingParticleLights);
   auto& root = Root::singleton();
+  auto assets = root.assets();
   auto configuration = root.configuration();
   bool newLighting = configuration->get("newLighting").optBool().value(true);
   bool monochrome = configuration->get("monochromeLighting").toBool();
-  m_lightingCalculator.setParameters(root.assets()->json("/lighting.config:lighting").set("pointAdditive", newLighting));
+  m_lightingCalculator.setParameters(assets->json("/lighting.config:lighting").set("pointAdditive", newLighting));
   m_lightingCalculator.setMonochrome(monochrome);
   m_lightingCalculator.begin(lightRange);
   lightingTileGather();
 
   prepLocker.unlock();
 
+  // Performance: Expand region for light culling - lights outside this range cannot contribute
+  // Use configurable maximum light spread distance
+  RectF calcRegion = RectF(m_lightingCalculator.calculationRegion());
+  float maxLightRange = assets->json("/rendering.config:performance.maxLightRange").optFloat().value(80.0f);
+
   for (auto const& light : lights) {
     Vec2F position = m_geometry.nearestTo(Vec2F(m_lightingCalculator.calculationRegion().min()), light.position);
+    
+    // Performance: Skip lights that are definitely too far to contribute
+    // Cull based on light intensity - dimmer lights have shorter effective range
+    float lightIntensity = std::max({light.color[0], light.color[1], light.color[2]});
+    float effectiveRange = maxLightRange * std::sqrt(lightIntensity);
+    if (!calcRegion.padded(effectiveRange).contains(position))
+      continue;
+
     if (light.type == LightType::Spread)
       m_lightingCalculator.addSpreadLight(position, light.color);
     else {
@@ -1769,6 +1800,11 @@ void WorldClient::lightingCalc() {
 
   for (auto const& lightPair : particleLights) {
     Vec2F position = m_geometry.nearestTo(Vec2F(m_lightingCalculator.calculationRegion().min()), lightPair.first);
+    // Performance: Cull particle lights by intensity-based range
+    float lightIntensity = std::max({lightPair.second[0], lightPair.second[1], lightPair.second[2]});
+    float effectiveRange = maxLightRange * std::sqrt(lightIntensity);
+    if (!calcRegion.padded(effectiveRange).contains(position))
+      continue;
     m_lightingCalculator.addSpreadLight(position, lightPair.second);
   }
 
