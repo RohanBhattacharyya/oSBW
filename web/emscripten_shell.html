@@ -475,6 +475,50 @@
       });
     }
 
+    // Async version that waits for sync to complete
+    function syncToIndexedDB(reason) {
+      return new Promise((resolve, reject) => {
+        const fs = getFs();
+        const idbfs = getIdbfs();
+        if (!fs || !idbfs) {
+          resolve(); // No IDBFS, nothing to sync
+          return;
+        }
+        console.info('[Web] syncToIndexedDB:', reason);
+        fs.syncfs(false, (err) => {
+          if (err) {
+            console.warn('[Web] syncToIndexedDB failed:', err);
+            reject(err);
+          } else {
+            console.info('[Web] syncToIndexedDB complete:', reason);
+            resolve();
+          }
+        });
+      });
+    }
+
+    // Async version that loads from IndexedDB (populate=true)
+    function loadFromIndexedDB(reason) {
+      return new Promise((resolve, reject) => {
+        const fs = getFs();
+        const idbfs = getIdbfs();
+        if (!fs || !idbfs) {
+          resolve(); // No IDBFS, nothing to load
+          return;
+        }
+        console.info('[Web] loadFromIndexedDB:', reason);
+        fs.syncfs(true, (err) => {
+          if (err) {
+            console.warn('[Web] loadFromIndexedDB failed:', err);
+            reject(err);
+          } else {
+            console.info('[Web] loadFromIndexedDB complete:', reason);
+            resolve();
+          }
+        });
+      });
+    }
+
     function scheduleSync(reason) {
       const fs = getFs();
       const idbfs = getIdbfs();
@@ -602,9 +646,9 @@
           if (!(err && (err.errno === 10 || String(err).includes('EBUSY'))))
             throw err;
         }
-        return new Promise((resolve, reject) => {
-          fs.syncfs(true, (err) => err ? reject(err) : resolve());
-        });
+        
+        // Load persisted data from IndexedDB (saves and mods)
+        await loadFromIndexedDB('ensureFsReady');
       } else {
         console.warn('[Web] IDBFS is not available; saves will not persist.');
         setStatus('Warning: Persistent saves unavailable (IDBFS missing)');
@@ -908,16 +952,18 @@
         await new Promise(r => setTimeout(r, 0)); // Yield to UI
       }
       
-      // Sync to IndexedDB
-      scheduleSync('importSave');
       hideUploadProgress();
       renderModsList();
-      setStatus(`Imported ${processed} files. Syncing to storage...`);
+      setStatus(`Imported ${processed} files. Syncing to IndexedDB...`);
       
-      // Force sync and wait a bit
-      forceSyncNow('import');
-      await new Promise(r => setTimeout(r, 1500));
-      setStatus('Import complete. Refresh page to use new save data.');
+      // Wait for sync to complete
+      try {
+        await syncToIndexedDB('importSave');
+        setStatus('Import complete. Refresh page to use new save data.');
+      } catch (err) {
+        console.warn('[Web] Import sync failed:', err);
+        setStatus('Import complete (sync may have failed). Refresh page to use new save data.');
+      }
     }
 
     async function ensurePreloadConfig() {
@@ -1236,19 +1282,23 @@
             setUploadProgress(frac);
           });
           hideUploadProgress();
-          scheduleSync('installModPak');
         }
         hideUploadProgress();
-        setStatus('Mods installed. Syncing storage...');
+        setStatus('Mods installed. Syncing to IndexedDB...');
         renderModsList();
-        // Keep Start disabled for 1.5s to allow IndexedDB sync
+        // Wait for sync to complete before enabling Start
         modUploadPending = true;
         updateStartButton();
-        setTimeout(() => {
+        try {
+          await syncToIndexedDB('installModPak');
+          setStatus('Mods ready.');
+        } catch (err) {
+          console.warn('[Web] Mod sync failed:', err);
+          setStatus('Mods installed (sync may have failed).');
+        } finally {
           modUploadPending = false;
           updateStartButton();
-          setStatus('Mods ready.');
-        }, 1500);
+        }
       }
 
       async function handleModDirectoryFiles(fileList) {
@@ -1269,19 +1319,23 @@
             const frac = total ? (written / total) : 1;
             setUploadProgress(frac);
           });
-          scheduleSync('installModFolder');
         }
         hideUploadProgress();
-        setStatus('Mod folder installed. Syncing storage...');
+        setStatus('Mod folder installed. Syncing to IndexedDB...');
         renderModsList();
-        // Keep Start disabled for 1.5s to allow IndexedDB sync
+        // Wait for sync to complete before enabling Start
         modUploadPending = true;
         updateStartButton();
-        setTimeout(() => {
+        try {
+          await syncToIndexedDB('installModFolder');
+          setStatus('Mods ready.');
+        } catch (err) {
+          console.warn('[Web] Mod sync failed:', err);
+          setStatus('Mods installed (sync may have failed).');
+        } finally {
           modUploadPending = false;
           updateStartButton();
-          setStatus('Mods ready.');
-        }, 1500);
+        }
       }
 
       if (modPakInput) {
@@ -1327,12 +1381,14 @@
         }
         try {
           console.info('[Web] Start clicked');
-          setStatus('Preparing filesystem...');
+          setStatus('Loading save data from IndexedDB...');
           await ensureFsReady();
           installFsSyncHooks();
+          setStatus('Checking mods...');
           renderModsList();
           await ensurePreloadConfig();
           hideUploadProgress();
+          setStatus('Loading game assets...');
           await ensurePakAvailable(input.files[0]);
           hideUploadProgress();
           setStatus('Writing config...');

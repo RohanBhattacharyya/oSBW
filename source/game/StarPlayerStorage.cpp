@@ -79,19 +79,21 @@ PlayerStorage::PlayerStorage(String const& storageDir) {
     }
   }
 
-  try {
-    String filename = File::relativeTo(m_storageDirectory, "metadata");
-    m_metadata = Json::parseJson(File::readFileString(filename)).toObject();
+  String metadataFilename = File::relativeTo(m_storageDirectory, "metadata");
+  if (File::isFile(metadataFilename)) {
+    try {
+      m_metadata = Json::parseJson(File::readFileString(metadataFilename)).toObject();
 
-    if (auto order = m_metadata.value("order")) {
-      for (auto const& jUuid : order.iterateArray()) {
-        auto entry = m_savedPlayersCache.find(Uuid(jUuid.toString()));
-        if (entry != m_savedPlayersCache.end())
-          m_savedPlayersCache.toBack(entry);
+      if (auto order = m_metadata.value("order")) {
+        for (auto const& jUuid : order.iterateArray()) {
+          auto entry = m_savedPlayersCache.find(Uuid(jUuid.toString()));
+          if (entry != m_savedPlayersCache.end())
+            m_savedPlayersCache.toBack(entry);
+        }
       }
+    } catch (std::exception const& e) {
+      Logger::warn("Error loading player storage metadata file, resetting: {}", outputException(e, false));
     }
-  } catch (std::exception const& e) {
-    Logger::warn("Error loading player storage metadata file, resetting: {}", outputException(e, false));
   }
 }
 
