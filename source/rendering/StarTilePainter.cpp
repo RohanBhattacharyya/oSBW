@@ -107,6 +107,10 @@ void TilePainter::cleanup() {
   m_pendingTerrainChunks.clear();
   m_pendingLiquidChunks.clear();
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  return;
+#endif
+
   m_textureCache.cleanup();
   m_terrainChunkCache.cleanup();
   m_liquidChunkCache.cleanup();

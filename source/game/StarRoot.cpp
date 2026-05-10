@@ -151,6 +151,15 @@ Root::~Root() {
 void Root::maintenanceStep() {
   m_reloadListeners.clearExpiredListeners();
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // Cache eviction and config writes are periodic desktop maintenance jobs.
+  // In the single-thread browser build they run on the same event loop as
+  // gameplay, rendering, and audio, causing visible stalls followed by costly
+  // synchronous reloads. Keep hot data resident for the offline session.
+  Random::addEntropy();
+  return;
+#endif
+
   {
     MutexLocker locker(m_objectDatabaseMutex);
     if (ObjectDatabasePtr objectDb = m_objectDatabase) {
@@ -406,7 +415,11 @@ void Root::fullyLoad() {
   {
     MutexLocker locker(m_assetsMutex);
     if (m_assets)
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+      Logger::info("Root: Keeping asset cache warm on single-thread Emscripten");
+#else
       m_assets->clearCache();
+#endif
   }
 }
 

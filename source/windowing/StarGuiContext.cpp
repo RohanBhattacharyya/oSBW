@@ -466,6 +466,10 @@ bool GuiContext::setClipboardFile(String const& path) {
 }
 
 void GuiContext::cleanup() {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  return;
+#endif
+
   int64_t textureTimeout = Root::singleton().assets()->json("/rendering.config:textureTimeout").toInt();
   if (m_textureCollection)
     m_textureCollection->cleanup(textureTimeout);

@@ -26,6 +26,15 @@ bool AssetTextureGroup::textureLoaded(AssetPath const& imagePath) const {
 }
 
 void AssetTextureGroup::cleanup(int64_t textureTimeout) {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  _unused(textureTimeout);
+  if (m_reloadTracker->pullTriggered()) {
+    m_textureMap.clear();
+    m_textureDeduplicationMap.clear();
+  }
+  return;
+#endif
+
   if (m_reloadTracker->pullTriggered()) {
     m_textureMap.clear();
     m_textureDeduplicationMap.clear();

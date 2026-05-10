@@ -156,6 +156,9 @@ void WorldPainter::render(WorldRenderData& renderData, function<bool()> lightWai
     m_renderer->render(renderFlatRect(RectF::withSize({}, Vec2F(m_camera.screenSize())), Vec4B(renderData.dimColor, dimLevel), 0.0f));
 
   int64_t textureTimeout = m_assets->json("/rendering.config:textureTimeout").toInt();
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  textureTimeout = std::numeric_limits<int64_t>::max();
+#endif
   m_textPainter->cleanup(textureTimeout);
   m_drawablePainter->cleanup(textureTimeout);
   m_environmentPainter->cleanup(textureTimeout);

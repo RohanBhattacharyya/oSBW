@@ -149,12 +149,11 @@ Assets::Assets(Settings settings, StringList assetSources) {
   m_settings = std::move(settings);
 
 #ifdef STAR_SYSTEM_EMSCRIPTEN
-  // On the web, short effects are better decoded up front, but fully decoding
-  // music during gameplay causes large stalls and memory spikes. Compressed
-  // audio is already copied into memory by StarAudio, so long tracks can stream
-  // from that memory buffer without touching the JS-backed asset filesystem.
-  m_settings.audioDecompressLimit = 30.0f;
-  Logger::info("Assets: Decoding short compressed audio on Emscripten; long tracks stream from memory");
+  // On the single-thread web build, first-use decode happens on the browser
+  // event loop. Keep compressed audio memory-backed and decode incrementally
+  // during playback to avoid large stalls when a new sound effect appears.
+  m_settings.audioDecompressLimit = 0.0f;
+  Logger::info("Assets: Streaming compressed audio from memory on Emscripten");
 #endif
 
   m_stopThreads = false;

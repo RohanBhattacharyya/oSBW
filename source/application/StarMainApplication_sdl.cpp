@@ -674,7 +674,15 @@ private:
       ImGui_ImplSDL3_NewFrame();
     #endif
 
-      int updatesBehind = max<int>(round(m_updateTicker.ticksBehind()), 1);
+      int updatesBehind;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+      // requestAnimationFrame may run above the simulation tick rate on high
+      // refresh displays. Do not force one update per rendered frame, or
+      // gameplay speed becomes FPS-dependent.
+      updatesBehind = max<int>(round(m_updateTicker.ticksBehind()), 0);
+#else
+      updatesBehind = max<int>(round(m_updateTicker.ticksBehind()), 1);
+#endif
       updatesBehind = min<int>(updatesBehind, m_maxFrameSkip + 1);
       for (int i = 0; i < updatesBehind; ++i) {
         //since frame-skipping is a thing, we have to begin a new ImGui frame here to prevent duplicate elements made by updates
@@ -890,6 +898,9 @@ private:
     }
 
     void setMaxFrameSkip(unsigned maxFrameSkip) override {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+      maxFrameSkip = max<unsigned>(maxFrameSkip, 8);
+#endif
       parent->m_maxFrameSkip = maxFrameSkip;
     }
 
