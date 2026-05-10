@@ -462,8 +462,17 @@ WorldClientState& WorldClient::clientState() {
 }
 
 void WorldClient::render(WorldRenderData& renderData, unsigned bufferTiles) {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // Single-threaded Emscripten: Thread::invoke runs the lambda inline,
+  // and lightingMain's m_lightingCond.wait() would block the main thread
+  // forever. Force synchronous lighting (the "else lightingCalc()" branch
+  // below) by clearing the async flag.
+  if (m_asyncLighting)
+    m_asyncLighting = false;
+#else
   if (!m_lightingThread && m_asyncLighting)
     m_lightingThread = Thread::invoke("WorldClient::lightingMain", mem_fn(&WorldClient::lightingMain), this);
+#endif
 
   renderData.clear();
   if (!inWorld())

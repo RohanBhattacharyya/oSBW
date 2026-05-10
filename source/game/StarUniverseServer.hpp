@@ -175,7 +175,14 @@ private:
   void systemWorldUpdated(SystemWorldServerThread* systemWorldServer);
   void packetsReceived(UniverseConnectionServer* connectionServer, ConnectionId clientId, List<PacketPtr> packets);
 
-  void acceptConnection(UniverseConnection connection, Maybe<HostAddress> remoteAddress);
+  // reservedClientId / localPrepushed support the Emscripten-no-pthreads
+  // local-client path: the caller pre-pushes ProtocolResponse and
+  // ConnectSuccess (and the initial UniverseTimeUpdate / Pause) onto the
+  // outgoing pipe so UniverseClient::connect doesn't busy-wait, and reserves
+  // the client id up front so the pre-pushed ConnectSuccess matches the id
+  // chosen here. When localPrepushed is true those pushes are skipped.
+  void acceptConnection(UniverseConnection connection, Maybe<HostAddress> remoteAddress,
+                        Maybe<ConnectionId> reservedClientId = {}, bool localPrepushed = false);
 
   // Main lock and clients read lock must be held when calling
   WarpToWorld resolveWarpAction(WarpAction warpAction, ConnectionId clientId, bool deploy) const;

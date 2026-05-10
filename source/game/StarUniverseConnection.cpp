@@ -130,6 +130,16 @@ UniverseConnectionServer::UniverseConnectionServer(PacketReceiveCallback packetR
   else
     m_numWorkerThreads = numWorkerThreads;
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // Without pthreads, Thread::start() runs the worker function inline on the
+  // calling thread (see StarThread_unix.cpp). The worker below is an infinite
+  // while(!m_shutdown) loop, which would deadlock the main thread inside this
+  // constructor. Skip thread creation and rely on cooperative pollPackets()
+  // calls from UniverseServer::updateMainLoop() instead.
+  m_numWorkerThreads = 0;
+  m_workerStats.resize(1);
+  Logger::info("UniverseConnectionServer: Cooperative mode (no pthreads); networking polled inline.");
+#else
   Logger::info("UniverseConnectionServer: Starting {} network worker threads", m_numWorkerThreads);
 
   m_workerStats.resize(m_numWorkerThreads);
@@ -192,6 +202,48 @@ UniverseConnectionServer::UniverseConnectionServer(PacketReceiveCallback packetR
             p.second->packetSocket->close();
       }
     }));
+  }
+#endif
+}
+
+void UniverseConnectionServer::pollPackets() {
+  if (m_shutdown)
+    return;
+
+  RecursiveMutexLocker connectionsLocker(m_connectionsMutex);
+  auto connections = m_connections.pairs();
+  connectionsLocker.unlock();
+
+  for (auto& p : connections) {
+    MutexLocker connectionLocker(p.second->mutex);
+    if (!p.second->packetSocket || !p.second->packetSocket->isOpen())
+      continue;
+
+    p.second->packetSocket->sendPackets(take(p.second->sendQueue));
+    p.second->packetSocket->writeData();
+
+    p.second->packetSocket->readData();
+    List<PacketPtr> receivePackets = p.second->packetSocket->receivePackets();
+    if (!receivePackets.empty()) {
+      p.second->lastActivityTime = Time::monotonicMilliseconds();
+      if (!m_workerStats.empty())
+        m_workerStats[0].packetsProcessed += receivePackets.size();
+      p.second->receiveQueue.appendAll(take(receivePackets));
+    }
+
+    if (!p.second->receiveQueue.empty()) {
+      List<PacketPtr> toReceive = List<PacketPtr>::from(take(p.second->receiveQueue));
+      connectionLocker.unlock();
+
+      try {
+        m_packetReceiver(this, p.first, std::move(toReceive));
+      } catch (std::exception const& e) {
+        Logger::error("Exception caught handling incoming server packets, disconnecting client '{}' {}", p.first, outputException(e, true));
+
+        connectionLocker.lock();
+        p.second->packetSocket->close();
+      }
+    }
   }
 }
 

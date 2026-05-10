@@ -93,6 +93,12 @@ public:
 
   void sendPackets(ConnectionId clientId, List<PacketPtr> packets);
 
+  // Run one cooperative pass over all connections (drain send queues, read
+  // sockets, dispatch received packets). Used in builds that have no worker
+  // threads (e.g. Emscripten without pthreads); harmless when workers exist
+  // but should not be called from outside the server in that case.
+  void pollPackets();
+
   // Get total packets processed across all worker threads
   uint64_t totalPacketsProcessed() const;
   // Get number of worker threads

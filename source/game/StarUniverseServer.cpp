@@ -132,7 +132,67 @@ void UniverseServer::addClient(UniverseConnection remoteConnection) {
 
 UniverseConnection UniverseServer::addLocalClient() {
   auto pair = LocalPacketSocket::openPair();
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // Single-threaded mode: in this build Thread::invoke runs the worker
+  // function inline, and Thread::sleep doesn't yield to the JS event loop,
+  // so the standard packet-protocol handshake deadlocks (server side
+  // busy-waits for a packet the client can't push until addLocalClient
+  // returns; client side then busy-waits for a response the server isn't
+  // running to produce).
+  //
+  // Bypass the deadlock without introducing ASYNCIFY: pre-push the
+  // deterministic protocol responses (ProtocolResponse + ConnectSuccess +
+  // initial UniverseTimeUpdate + Pause) onto the connection's outgoing
+  // pipe so UniverseClient::connect's receiveAny calls find them on the
+  // first poll, and defer the server-side bookkeeping (which needs
+  // ClientConnect from the client) to a fresh JS event-loop tick after
+  // client.connect has run.
+  UniverseConnection serverEnd(std::move(pair.first));
+
+  WriteLocker clientsLocker(m_clientsLock);
+  ConnectionId reservedClientId = m_clients.nextId();
+  clientsLocker.unlock();
+
+  auto& root = Root::singleton();
+  auto configuration = root.configuration();
+  auto connectionSettings = configuration->get("connectionSettings");
+
+  auto protocolResponse = make_shared<ProtocolResponsePacket>();
+  protocolResponse->setCompressionMode(PacketCompressionMode::Enabled);
+  protocolResponse->allowed = true;
+  auto compressionName = connectionSettings.getString("compression", "None");
+  auto compressionMode = NetCompressionModeNames.maybeLeft(compressionName).value(NetCompressionMode::None);
+  protocolResponse->info = JsonObject{
+    {"compression", NetCompressionModeNames.getRight(compressionMode)},
+    {"openProtocolVersion", OpenProtocolVersion}};
+  serverEnd.pushSingle(protocolResponse);
+  serverEnd.pushSingle(make_shared<ConnectSuccessPacket>(reservedClientId,
+      m_universeSettings->uuid(), m_celestialDatabase->baseInformation()));
+  serverEnd.pushSingle(make_shared<UniverseTimeUpdatePacket>(m_universeClock->time()));
+  serverEnd.pushSingle(make_shared<PausePacket>(*m_pause, GlobalTimescale));
+  serverEnd.send();
+
+  struct PendingLocalAccept {
+    UniverseServer* server;
+    ConnectionId reservedId;
+    shared_ptr<UniverseConnection> connection;
+  };
+  auto* pending = new PendingLocalAccept{this, reservedClientId,
+      make_shared<UniverseConnection>(std::move(serverEnd))};
+  emscripten_set_timeout([](void* arg) {
+    auto* p = static_cast<PendingLocalAccept*>(arg);
+    try {
+      p->server->acceptConnection(std::move(*p->connection), {}, p->reservedId, true);
+    } catch (std::exception const& e) {
+      Logger::error("UniverseServer: deferred local acceptConnection failed: {}", outputException(e, true));
+    } catch (...) {
+      Logger::error("UniverseServer: deferred local acceptConnection failed: unknown exception");
+    }
+    delete p;
+  }, 0.0, pending);
+#else
   addClient(UniverseConnection(std::move(pair.first)));
+#endif
   return UniverseConnection(std::move(pair.second));
 }
 
@@ -620,6 +680,12 @@ void UniverseServer::updateMainLoop(TcpServerPtr& tcpServer) {
   }
 
   LogMap::set("universe_time", m_universeClock->time());
+
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // No background network worker threads on this build; drain send/receive
+  // queues cooperatively before the rest of the tick runs.
+  m_connectionServer->pollPackets();
+#endif
 
   try {
     updateLua();
@@ -1695,7 +1761,8 @@ void UniverseServer::packetsReceived(UniverseConnectionServer*, ConnectionId cli
   }
 }
 
-void UniverseServer::acceptConnection(UniverseConnection connection, Maybe<HostAddress> remoteAddress) {
+void UniverseServer::acceptConnection(UniverseConnection connection, Maybe<HostAddress> remoteAddress,
+                                      Maybe<ConnectionId> reservedClientId, bool localPrepushed) {
   auto& root = Root::singleton();
   auto assets = root.assets();
   auto configuration = root.configuration();
@@ -1742,8 +1809,10 @@ void UniverseServer::acceptConnection(UniverseConnection connection, Maybe<HostA
       {"compression", NetCompressionModeNames.getRight(compressionMode)},
       {"openProtocolVersion", OpenProtocolVersion}};
   }
-  connection.pushSingle(protocolResponse);
-  connection.sendAll(clientWaitLimit);
+  if (!localPrepushed) {
+    connection.pushSingle(protocolResponse);
+    connection.sendAll(clientWaitLimit);
+  }
 
   if (auto compressedSocket = as<CompressedPacketSocket>(&connection.packetSocket()))
     compressedSocket->setCompressionStreamEnabled(useCompressionStream);
@@ -1871,7 +1940,7 @@ void UniverseServer::acceptConnection(UniverseConnection connection, Maybe<HostA
     return;
   }
 
-  ConnectionId clientId = m_clients.nextId();
+  ConnectionId clientId = reservedClientId.value(m_clients.nextId());
   auto clientContext = make_shared<ServerClientContext>(clientId, remoteAddress, netRules, clientConnect->playerUuid,
                                                         clientConnect->playerName, clientConnect->shipSpecies, administrator, clientConnect->shipChunks);
   clientContext->registerRpcHandlers(m_teamManager->rpcHandlers());
@@ -1895,7 +1964,9 @@ void UniverseServer::acceptConnection(UniverseConnection connection, Maybe<HostA
   clientContext->setShipUpgrades(clientConnect->shipUpgrades);
 
   m_connectionServer->addConnection(clientId, std::move(connection));
-  m_connectionServer->sendPackets(clientId, {make_shared<ConnectSuccessPacket>(clientId, m_universeSettings->uuid(), m_celestialDatabase->baseInformation()), make_shared<UniverseTimeUpdatePacket>(m_universeClock->time()), make_shared<PausePacket>(*m_pause, GlobalTimescale)});
+  if (!localPrepushed) {
+    m_connectionServer->sendPackets(clientId, {make_shared<ConnectSuccessPacket>(clientId, m_universeSettings->uuid(), m_celestialDatabase->baseInformation()), make_shared<UniverseTimeUpdatePacket>(m_universeClock->time()), make_shared<PausePacket>(*m_pause, GlobalTimescale)});
+  }
 
   m_clients.add(clientId, clientContext);
   m_chatProcessor->connectClient(clientId, clientConnect->playerName);
