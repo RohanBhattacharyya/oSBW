@@ -1376,11 +1376,12 @@ void ClientApplication::updateRunning(float dt) {
     }
 
     if (m_mainInterface->currentState() == MainInterface::ReturnToTitle) {
-#if defined(STAR_WEB_OFFLINE) && defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
-      appController()->quit();
-#else
+      // Save & Quit always returns to the title screen, mirroring desktop.
+      // Only the title screen's own Quit button routes through
+      // MainAppState::Quit -> app->quit(), which is the path that actually
+      // tears the runtime down (in the offline web build, back to the JS
+      // pak-picker shell).
       changeState(MainAppState::Title);
-#endif
     }
 
   } catch (std::exception& e) {

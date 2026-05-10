@@ -547,25 +547,10 @@ public:
   }
 
   ~SdlPlatform() {
-
-    if (m_sdlAudioOutputStream)
-      SDL_CloseAudioDevice(SDL_GetAudioStreamDevice(m_sdlAudioOutputStream));
-
-    closeAudioInputDevice();
-
-    m_renderer.reset();
-
-  #ifndef __EMSCRIPTEN__
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-  #endif
-
-    Logger::info("Application: Destroying SDL Window");
-    SDL_GL_DestroyContext(m_sdlGlContext);
-    SDL_DestroyWindow(m_sdlWindow);
-
-    SDL_Quit();
+    // shutdown() is idempotent (guarded by m_shutdownComplete) and now
+    // owns the full SDL teardown so it also runs in the Emscripten quit
+    // path where this destructor is bypassed.
+    shutdown();
   }
 
   typedef std::function<void(uint8_t*, int)> AudioCallback;
@@ -739,18 +724,52 @@ private:
 
     try {
       Logger::info("Application: shutdown...");
-      m_application->shutdown();
+      if (m_application)
+        m_application->shutdown();
     } catch (std::exception const& e) {
       Logger::error("Application: threw exception during shutdown: {}", outputException(e, true));
     }
 
-    SDL_CloseAudioDevice(SDL_GetAudioStreamDevice(m_sdlAudioOutputStream));
+    if (m_acceptingTextInput && m_sdlWindow) {
+      SDL_StopTextInput(m_sdlWindow);
+      m_acceptingTextInput = false;
+    }
+
+    if (m_sdlAudioOutputStream) {
+      SDL_CloseAudioDevice(SDL_GetAudioStreamDevice(m_sdlAudioOutputStream));
+      m_sdlAudioOutputStream = 0;
+    }
+    closeAudioInputDevice();
     m_SdlControllers.clear();
 
     SDL_SetCursor(NULL);
     m_cursorCache.clear();
 
     m_application.reset();
+    m_renderer.reset();
+
+  #ifndef __EMSCRIPTEN__
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+  #endif
+
+    // Emscripten's simulate_infinite_loop bypasses ~SdlPlatform, so we
+    // must destroy SDL state explicitly here. Otherwise a subsequent
+    // Module.callMain() builds a new SdlPlatform on top of the previous
+    // session's SDL window + GL context + audio device + JS event
+    // listeners, which is why text input (per-window) stops routing even
+    // though keydown events (window-agnostic) keep working.
+    Logger::info("Application: Destroying SDL Window");
+    if (m_sdlGlContext) {
+      SDL_GL_DestroyContext(m_sdlGlContext);
+      m_sdlGlContext = 0;
+    }
+    if (m_sdlWindow) {
+      SDL_DestroyWindow(m_sdlWindow);
+      m_sdlWindow = 0;
+    }
+    SDL_Quit();
   }
   struct Controller : public ApplicationController {
     Controller(SdlPlatform* parent)
@@ -927,14 +946,21 @@ private:
     }
 
     void setAcceptingTextInput(bool acceptingTextInput) override {
-      if (acceptingTextInput != parent->m_acceptingTextInput) {
-        if (acceptingTextInput)
-          SDL_StartTextInput(parent->m_sdlWindow);
-        else
-          SDL_StopTextInput(parent->m_sdlWindow);
+      // Don't cache against m_acceptingTextInput: after a runtime restart on
+      // the offline web build (Module.callMain re-entered after a quit), a
+      // fresh SdlPlatform is constructed but SDL3's Emscripten port retains
+      // some text-input bookkeeping bound to the previous session's window.
+      // The cache would short-circuit the first focus event (false stays
+      // false until a true is requested, then the new SDL_Window* never
+      // actually receives StartTextInput because cache says we already
+      // matched). Always re-issue the SDL call so the new window arms its
+      // text-input listeners every time focus moves.
+      if (acceptingTextInput)
+        SDL_StartTextInput(parent->m_sdlWindow);
+      else
+        SDL_StopTextInput(parent->m_sdlWindow);
 
-        parent->m_acceptingTextInput = acceptingTextInput;
-      }
+      parent->m_acceptingTextInput = acceptingTextInput;
     }
 
     void setTextArea(Maybe<pair<RectI, int>> area) override {
