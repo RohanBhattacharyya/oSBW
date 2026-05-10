@@ -322,6 +322,9 @@ void Mixer::read(int16_t* outBuffer, size_t frameCount, ExtraMixFunction extraMi
             if (audioInstance->m_loops > 0)
               --audioInstance->m_loops;
           } else {
+            if (ramt == 0)
+              Logger::warn("Mixer: Audio '{}' produced no samples, currentTime={}s totalTime={}s loops={}",
+                  audioInstance->m_audio.name(), audioInstance->m_audio.currentTime(), audioInstance->m_audio.totalTime(), audioInstance->m_loops);
             finished = true;
           }
         }

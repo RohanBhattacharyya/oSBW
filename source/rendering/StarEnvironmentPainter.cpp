@@ -158,7 +158,7 @@ void EnvironmentPainter::renderPlanetHorizon(float pixelRatio, Vec2F const& scre
   if (planetHorizon.empty())
     return;
 
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
   // On Emscripten, use blocking loadTexture since tryTexture/tryImage doesn't work
   // properly with workerPoolSize=0 (assets don't load in background)
   for (auto const& layer : planetHorizon.layers) {
@@ -338,7 +338,7 @@ void EnvironmentPainter::renderParallaxLayers(
             int frame = (layer.frameOffset + clamp<int>(frame_number, 0, layer.frameNumber - 1)) % layer.frameNumber;
             withDirectives.subPath.emplace(toString(frame));
           }
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
           // On Emscripten, use blocking loadTexture since tryTexture/tryImage doesn't work
           // properly with workerPoolSize=0 (assets don't load in background)
           if (auto texture = m_textureGroup->loadTexture(withDirectives)) {

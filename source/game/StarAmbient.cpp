@@ -59,8 +59,11 @@ AudioInstancePtr AmbientManager::updateAmbient(AmbientNoisesDescriptionPtr curre
   auto assets = Root::singleton().assets();
 
   if (m_currentTrack) {
-    if (m_currentTrack->finished())
+    if (m_currentTrack->finished()) {
+      Logger::warn("AmbientManager: Music track '{}' finished, currentTime={}s totalTime={}s",
+          m_currentTrackName, m_currentTrack->currentTime(), m_currentTrack->totalTime());
       m_currentTrack = {};
+    }
   }
   StringList tracks;
   if (current)
@@ -91,7 +94,7 @@ AudioInstancePtr AmbientManager::updateAmbient(AmbientNoisesDescriptionPtr curre
     if (!m_currentTrackName.empty()) {
       Logger::info("AmbientManager: Attempting to load music track '{}'", m_currentTrackName);
       AudioConstPtr audio;
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
       // On Emscripten with workerPoolSize=0, tryAudio() returns empty because
       // assets aren't loaded in background threads. Use blocking audio() instead.
       try {
@@ -116,6 +119,8 @@ AudioInstancePtr AmbientManager::updateAmbient(AmbientNoisesDescriptionPtr curre
         m_duration = 0;
         m_volumeChanged = false;
         return m_currentTrack;
+      } else {
+        Logger::warn("AmbientManager: Music track '{}' did not produce audio data", m_currentTrackName);
       }
     }
   }
@@ -156,7 +161,7 @@ AudioInstancePtr AmbientManager::updateWeather(WeatherNoisesDescriptionPtr curre
     m_weatherTrackName = Random::randValueFrom(tracks);
     if (!m_weatherTrackName.empty()) {
       AudioConstPtr audio;
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
       try {
         audio = assets->audio(m_weatherTrackName);
       } catch (std::exception const& e) {

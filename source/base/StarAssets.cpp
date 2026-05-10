@@ -148,13 +148,13 @@ Assets::Assets(Settings settings, StringList assetSources) {
 
   m_settings = std::move(settings);
 
-#ifdef EMSCRIPTEN
-  // On the web, the audio callback runs in a separate thread and accessing
-  // compressed audio files (OGG) from that thread can fail because file I/O
-  // may require proxying to the main thread. Force all audio to be decompressed
-  // on load to avoid this issue. This uses more memory but ensures music plays.
-  m_settings.audioDecompressLimit = 600.0f; // 10 minutes - decompress all music tracks
-  Logger::info("Assets: Forcing audioDecompressLimit=600s on Emscripten to fix music playback");
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+  // On the web, short effects are better decoded up front, but fully decoding
+  // music during gameplay causes large stalls and memory spikes. Compressed
+  // audio is already copied into memory by StarAudio, so long tracks can stream
+  // from that memory buffer without touching the JS-backed asset filesystem.
+  m_settings.audioDecompressLimit = 30.0f;
+  Logger::info("Assets: Decoding short compressed audio on Emscripten; long tracks stream from memory");
 #endif
 
   m_stopThreads = false;
@@ -379,7 +379,7 @@ Assets::Assets(Settings settings, StringList assetSources) {
     // clear any caching that may have been trigered by load scripts as they may no longer be valid
     m_framesSpecifications.clear();
     m_assetsCache.clear();
-  #ifdef EMSCRIPTEN
+  #ifdef STAR_SYSTEM_EMSCRIPTEN
     // In web builds, filesystem-backed asset sources (e.g. IDBFS-mounted /mods)
     // can proxy file operations through the main thread. Leaving a pending
     // background load queue after scripts run can cause worker threads to start
@@ -442,7 +442,7 @@ Assets::Assets(Settings settings, StringList assetSources) {
   m_digest = digest.compute();
 
   int workerPoolSize = m_settings.workerPoolSize;
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
   // On the web, asset loads may involve JS-backed filesystem mounts (IDBFS).
   // Those operations can require proxying to the main thread; if the main
   // thread blocks waiting on a worker, it can deadlock. Avoid this by doing
@@ -893,7 +893,7 @@ shared_ptr<Assets::AssetData> Assets::tryAsset(AssetId const& id) const {
       throw AssetException::format("Error loading asset {}", id.path);
     }
   } else {
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
     // On Emscripten with workerPoolSize=0, there are no background workers to process
     // the asset queue. Instead of just queuing (which would never load), attempt to
     // load the asset synchronously. This allows tryImage/tryAudio to work properly
@@ -1195,7 +1195,7 @@ Json Assets::readJson(String const& path) const {
 
     Json result = applyJsonPatches(baseJson, path, m_files.get(path).patchSources);
 
-#ifdef EMSCRIPTEN
+#ifdef STAR_SYSTEM_EMSCRIPTEN
     // Web builds load mods via JS-backed filesystems (e.g. IDBFS) and we also
     // support user-provided mod packs. Some mods (or patch ordering) can result
     // in /player.config missing expected OpenSB script contexts at runtime.
@@ -1348,6 +1348,10 @@ shared_ptr<Assets::AssetData> Assets::loadAsset(AssetId const& id) const {
     }
 
     if (assetData) {
+#ifdef STAR_SYSTEM_EMSCRIPTEN
+      if (assetData->needsPostProcessing)
+        assetData = postProcessAudio(assetData);
+#endif
       if (assetData->needsPostProcessing)
         m_queue[id] = QueuePriority::PostProcess;
       else
@@ -1514,12 +1518,20 @@ shared_ptr<Assets::AssetData> Assets::postProcessAudio(shared_ptr<AssetData> con
       if (audioData->audio->totalTime() < m_settings.audioDecompressLimit) {
         auto audio = make_shared<Audio>(*audioData->audio);
         audio->uncompress();
+        audio->seekSample(0);
 
         auto newData = make_shared<AudioData>();
         newData->audio = audio;
+        newData->needsPostProcessing = false;
         return newData;
       } else {
-        return audioData;
+        auto audio = make_shared<Audio>(*audioData->audio);
+        audio->seekSample(0);
+
+        auto newData = make_shared<AudioData>();
+        newData->audio = audio;
+        newData->needsPostProcessing = false;
+        return newData;
       }
     } else {
       return {};
