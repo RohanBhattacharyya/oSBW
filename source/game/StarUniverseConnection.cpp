@@ -295,7 +295,7 @@ void UniverseConnectionServer::addConnection(ConnectionId clientId, UniverseConn
   connection->sendQueue = std::move(uc.m_sendQueue);
   connection->receiveQueue = std::move(uc.m_receiveQueue);
   connection->lastActivityTime = Time::monotonicMilliseconds();
-  connection->workerIndex = clientId % m_numWorkerThreads;
+  connection->workerIndex = m_numWorkerThreads != 0 ? clientId % m_numWorkerThreads : 0;
   m_connections.add(clientId, std::move(connection));
 }
 
