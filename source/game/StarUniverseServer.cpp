@@ -1325,6 +1325,15 @@ void UniverseServer::handleWorldMessages() {
 }
 
 void UniverseServer::shutdownInactiveWorlds() {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  // Offline single-thread builds prioritize getting into and staying in the
+  // local universe over dedicated-server style memory reclamation.  World
+  // creation jobs complete cooperatively on the main thread, so a just-created
+  // destination can briefly have no clients while ship arrival / warp state
+  // catches up.  Evicting it here causes an expensive load-stop-load loop.
+  return;
+#endif
+
   RecursiveMutexLocker locker(m_mainLock);
   ReadLocker clientsLocker(m_clientsLock);
 
@@ -2217,6 +2226,20 @@ Maybe<WorldServerThreadPtr> UniverseServer::triggerWorldCreation(WorldId const& 
   if (!m_worlds.contains(worldId)) {
     if (auto promise = makeWorldPromise(worldId)) {
       m_worlds.add(worldId, promise.take());
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+      auto& maybeWorldPromise = m_worlds.get(worldId);
+      try {
+        if (!maybeWorldPromise)
+          return WorldServerThreadPtr();
+        if (maybeWorldPromise->poll())
+          return maybeWorldPromise->get();
+      } catch (std::exception const& e) {
+        maybeWorldPromise.reset();
+        Logger::error("UniverseServer: error during world create: {}", outputException(e, true));
+        worldDiedWithError(worldId);
+        return WorldServerThreadPtr();
+      }
+#endif
       return {};
     } else {
       return WorldServerThreadPtr();

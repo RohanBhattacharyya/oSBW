@@ -70,7 +70,8 @@ void WorldServerThread::start() {
 
       auto fidelity = world->m_webLockedFidelity.value(WorldServerFidelity::Medium);
       LogMap::set(strf("server_{}_fidelity", world->m_worldId), WorldServerFidelityNames.getRight(fidelity));
-      world->update(fidelity);
+      if (!world->noClients())
+        world->update(fidelity);
 
       if (world->m_webStorageTimer.timeUp()) {
         world->sync();
