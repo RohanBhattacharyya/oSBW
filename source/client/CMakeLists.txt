@@ -49,7 +49,28 @@ TARGET_LINK_LIBRARIES (starbound ${STAR_EXT_LIBS} ${STAR_EXT_GUI_LIBS})
 
 IF(EMSCRIPTEN)
   SET_TARGET_PROPERTIES (starbound PROPERTIES SUFFIX ".html")
-  SET(starbound_em_link_flags "--shell-file ${PROJECT_SOURCE_DIR}/../web/emscripten_shell.html -sEXPORTED_RUNTIME_METHODS=callMain,FS,setCanvasSize -sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -sEXCEPTION_DEBUG=1 -sNO_DISABLE_EXCEPTION_CATCHING -sUSE_SDL=3 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sSTACK_SIZE=5242880 -sDEFAULT_PTHREAD_STACK_SIZE=2097152 -lidbfs.js -lwebsocket.js --preload-file ${PROJECT_SOURCE_DIR}/../assets/opensb@/overrides")
+  set(STAR_WEB_OFFLINE_JS "false")
+  if(STAR_WEB_OFFLINE)
+    set(STAR_WEB_OFFLINE_JS "true")
+  endif()
+  file(READ "${PROJECT_SOURCE_DIR}/../web/vendor/jszip.min.js" STAR_WEB_JSZIP_INLINE)
+  set(starbound_em_shell_file "${PROJECT_SOURCE_DIR}/../web/emscripten_shell.html")
+  if(STAR_WEB_OFFLINE)
+    set(starbound_em_shell_file "${PROJECT_SOURCE_DIR}/../web/emscripten_offline_shell.html")
+  endif()
+  configure_file(
+    "${starbound_em_shell_file}"
+    "${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html"
+    @ONLY)
+  set_property(TARGET starbound APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html")
+
+  SET(starbound_em_link_flags "--shell-file ${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html -sEXPORTED_RUNTIME_METHODS=callMain,FS,setCanvasSize -sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -sEXCEPTION_DEBUG=1 -sNO_DISABLE_EXCEPTION_CATCHING -sUSE_SDL=3 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sSTACK_SIZE=5242880 -sDEFAULT_PTHREAD_STACK_SIZE=2097152 -lidbfs.js -lworkerfs.js -lwebsocket.js")
+
+  if(STAR_WEB_OFFLINE)
+    string(APPEND starbound_em_link_flags " -sSINGLE_FILE=1 -sMINIFY_HTML=0 --embed-file ${PROJECT_SOURCE_DIR}/../assets/opensb@/overrides")
+  else()
+    string(APPEND starbound_em_link_flags " --preload-file ${PROJECT_SOURCE_DIR}/../assets/opensb@/overrides")
+  endif()
 
   if(STAR_WEB_SAFE_HEAP)
     string(APPEND starbound_em_link_flags " -sSAFE_HEAP=1")
@@ -104,19 +125,25 @@ IF(EMSCRIPTEN)
   set_property(TARGET starbound APPEND PROPERTY LINK_DEPENDS "${opensb_web_fonts_stamp}")
 
   # Preload converted fonts under /overrides (in addition to the standard OpenSB overrides).
-  string(APPEND starbound_em_link_flags " --preload-file ${opensb_web_fonts_dir}@/overrides")
+  if(STAR_WEB_OFFLINE)
+    string(APPEND starbound_em_link_flags " --embed-file ${opensb_web_fonts_dir}@/overrides")
+  else()
+    string(APPEND starbound_em_link_flags " --preload-file ${opensb_web_fonts_dir}@/overrides")
+  endif()
 
   # Set link flags once (avoid CMake list semantics inserting ';' which breaks the shell command).
   SET_TARGET_PROPERTIES (starbound PROPERTIES LINK_FLAGS "${starbound_em_link_flags}")
 
-  add_custom_command(TARGET starbound POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      ${PROJECT_SOURCE_DIR}/../assets/opensb/preload.config
-      $<TARGET_FILE_DIR:starbound>/preload.config
-    COMMENT "Copy preload.config into web output")
+  if(NOT STAR_WEB_OFFLINE)
+    add_custom_command(TARGET starbound POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${PROJECT_SOURCE_DIR}/../assets/opensb/preload.config
+        $<TARGET_FILE_DIR:starbound>/preload.config
+      COMMENT "Copy preload.config into web output")
 
-  add_custom_command(TARGET starbound POST_BUILD
-    COMMAND ${PYTHON3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/../web/patch_emscripten_package_name.py"
-      --js "$<TARGET_FILE_DIR:starbound>/starbound.js"
-    COMMENT "Patch starbound.js PACKAGE_NAME to be relative")
+    add_custom_command(TARGET starbound POST_BUILD
+      COMMAND ${PYTHON3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/../web/patch_emscripten_package_name.py"
+        --js "$<TARGET_FILE_DIR:starbound>/starbound.js"
+      COMMENT "Patch starbound.js PACKAGE_NAME to be relative")
+  endif()
 ENDIF()

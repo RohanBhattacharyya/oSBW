@@ -2,6 +2,7 @@
 
 #include "StarWorldServer.hpp"
 #include "StarThread.hpp"
+#include "StarTime.hpp"
 #include "StarRpcThreadPromise.hpp"
 
 namespace Star {
@@ -104,6 +105,13 @@ private:
   shared_ptr<const atomic<bool>> m_pause;
   mutable atomic<bool> m_errorOccurred;
   mutable atomic<bool> m_shouldExpire;
+
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  int m_webIntervalId = 0;
+  double m_webStorageInterval = 0.0;
+  Timer m_webStorageTimer;
+  Maybe<WorldServerFidelity> m_webLockedFidelity;
+#endif
 };
 
 }

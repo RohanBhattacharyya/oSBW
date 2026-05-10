@@ -155,6 +155,15 @@
       "cacheVariables": {
         "STAR_WEB_PTHREADS": true
       }
+    },
+    {
+      "inherits": "emscripten-release",
+      "name": "emscripten-offline-release",
+      "displayName": "Emscripten Web (Offline Single HTML)",
+      "binaryDir": "${sourceParentDir}/build/emscripten-offline-release",
+      "cacheVariables": {
+        "STAR_WEB_OFFLINE": true
+      }
     }
   ],
   "buildPresets": [
@@ -199,6 +208,10 @@
     {
       "name": "emscripten-pthreads-release",
       "configurePreset": "emscripten-pthreads-release"
+    },
+    {
+      "name": "emscripten-offline-release",
+      "configurePreset": "emscripten-offline-release"
     }
   ],
   "testPresets": [

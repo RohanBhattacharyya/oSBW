@@ -2,6 +2,10 @@
 #include "StarTickRateMonitor.hpp"
 #include "StarNetPackets.hpp"
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/eventloop.h>
+#endif
+
 namespace Star {
 
 SystemWorldServerThread::SystemWorldServerThread(Vec3I const& location, SystemWorldServerPtr systemWorld, String storageFile)
@@ -14,6 +18,12 @@ SystemWorldServerThread::SystemWorldServerThread(Vec3I const& location, SystemWo
 
 SystemWorldServerThread::~SystemWorldServerThread() {
   m_stop = true;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId) {
+    emscripten_clear_interval(m_webIntervalId);
+    m_webIntervalId = 0;
+  }
+#endif
   join();
 }
 
@@ -50,6 +60,38 @@ void SystemWorldServerThread::setPause(shared_ptr<const atomic<bool>> pause) {
   m_pause = std::move(pause);
 }
 
+bool SystemWorldServerThread::start() {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId)
+    return false;
+
+  m_stop = false;
+  m_webIntervalId = emscripten_set_interval(
+    [](void* userData) {
+      auto systemWorld = static_cast<SystemWorldServerThread*>(userData);
+      if (systemWorld->m_stop) {
+        if (systemWorld->m_webIntervalId)
+          emscripten_clear_interval(systemWorld->m_webIntervalId);
+        systemWorld->m_webIntervalId = 0;
+        return;
+      }
+
+      systemWorld->update();
+      systemWorld->m_periodicStorage -= SystemWorldTimestep;
+      if (systemWorld->m_triggerStorage || systemWorld->m_periodicStorage <= 0.0f) {
+        systemWorld->m_triggerStorage = false;
+        systemWorld->m_periodicStorage = 300.0f;
+        systemWorld->store();
+      }
+    },
+    SystemWorldTimestep * 1000.0,
+    this);
+  return true;
+#else
+  return Thread::start();
+#endif
+}
+
 void SystemWorldServerThread::run() {
   TickRateApproacher tickApproacher(1.0 / SystemWorldTimestep, 0.5);
 
@@ -78,6 +120,13 @@ void SystemWorldServerThread::run() {
 
 void SystemWorldServerThread::stop() {
   m_stop = true;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId) {
+    emscripten_clear_interval(m_webIntervalId);
+    m_webIntervalId = 0;
+  }
+  store();
+#endif
 }
 
 void SystemWorldServerThread::update() {

@@ -19,6 +19,7 @@ STAR_CLASS(Player);
 STAR_CLASS(ChatProcessor);
 STAR_CLASS(CommandProcessor);
 STAR_CLASS(TeamManager);
+STAR_CLASS(TcpServer);
 STAR_CLASS(UniverseServer);
 STAR_CLASS(WorldTemplate);
 STAR_CLASS(WorldServer);
@@ -33,6 +34,8 @@ class UniverseServer : public Thread {
 public:
   UniverseServer(String const& storageDir);
   ~UniverseServer();
+
+  bool start();
 
   // If enabled, will listen on the configured server port for incoming
   // connections.
@@ -143,6 +146,7 @@ private:
   void handleWorldMessages();
   void shutdownInactiveWorlds();
   void doTriggeredStorage();
+  void updateMainLoop(TcpServerPtr& tcpServer);
 
   void saveSettings();
   void loadSettings();
@@ -269,6 +273,12 @@ private:
   typedef LuaUpdatableComponent<LuaBaseComponent> ScriptComponent;
   typedef shared_ptr<ScriptComponent> ScriptComponentPtr;
   StringMap<ScriptComponentPtr> m_scriptContexts;
+
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  TcpServerPtr m_webTcpServer;
+  bool m_webLoopRunning = false;
+  int m_webIntervalId = 0;
+#endif
 };
 
 }

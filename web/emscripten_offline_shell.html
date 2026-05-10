@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenStarbound</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #03070c;
+      color: #eef3ff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #canvas {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      display: block;
+      background: #000;
+      outline: none;
+    }
+
+    #boot {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(54, 87, 136, 0.28), transparent 34%),
+        linear-gradient(180deg, rgba(3, 7, 12, 0.92), rgba(3, 7, 12, 0.98));
+    }
+
+    #boot.done {
+      display: none;
+    }
+
+    .panel {
+      width: min(560px, calc(100vw - 40px));
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    #status {
+      min-height: 22px;
+      margin: 0 0 16px;
+      color: #b8c6db;
+      font-size: 14px;
+    }
+
+    .bar {
+      position: relative;
+      height: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .bar.indeterminate::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 38%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+      transform: translateX(-120%);
+      animation: sweep 1.4s linear infinite;
+      will-change: transform;
+    }
+
+    @keyframes sweep {
+      from {
+        transform: translateX(-120%);
+      }
+      to {
+        transform: translateX(280%);
+      }
+    }
+
+    #barFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #56d3ff, #9be66f);
+      transition: width 180ms ease;
+    }
+
+    #percent {
+      margin-top: 8px;
+      color: #91a1b8;
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      text-align: right;
+    }
+
+    #pakControls {
+      display: none;
+      margin-top: 16px;
+    }
+
+    #pakControls.show {
+      display: block;
+    }
+
+    .filePick {
+      display: block;
+      width: 100%;
+      padding: 13px 16px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: #eef3ff;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .filePick.disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+
+    .filePick input {
+      display: none;
+    }
+
+    #pakName {
+      min-height: 18px;
+      margin-top: 8px;
+      color: #91a1b8;
+      font-size: 12px;
+    }
+
+    #startBtn {
+      display: none;
+      width: 100%;
+      margin-top: 18px;
+      padding: 13px 16px;
+      border: 0;
+      background: #f5c542;
+      color: #161006;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    #startBtn.show {
+      display: block;
+    }
+
+    #startBtn:disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+
+    #log {
+      height: 132px;
+      margin-top: 18px;
+      padding: 10px;
+      overflow: auto;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.24);
+      color: #9fb0c7;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    #errorActions {
+      display: none;
+      margin-top: 14px;
+    }
+
+    #errorActions.show {
+      display: block;
+    }
+
+    #errorActions button {
+      padding: 9px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: #eef3ff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+
+  <div id="boot">
+    <div class="panel">
+      <h1>OpenStarbound</h1>
+      <p id="status">Chrome is loading the offline runtime.</p>
+      <div id="bar" class="bar indeterminate" aria-hidden="true"><div id="barFill"></div></div>
+      <div id="percent">0%</div>
+      <div id="pakControls">
+        <label id="pakChooser" class="filePick disabled">
+          Choose packed.pak
+          <input id="pakInput" type="file" accept=".pak" disabled />
+        </label>
+        <div id="pakName"></div>
+      </div>
+      <button id="startBtn" type="button" disabled>Click to enable audio and start</button>
+      <div id="errorActions">
+        <button id="copyLogBtn" type="button">Copy Log</button>
+      </div>
+      <div id="log" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    const OPENSTARBOUND_PRELOAD_CONFIG = [
+      { type: "json", path: "/player.config:inventoryFilters" }
+    ];
+
+    const canvas = document.getElementById('canvas');
+    const boot = document.getElementById('boot');
+    const statusEl = document.getElementById('status');
+    const barEl = document.getElementById('bar');
+    const barFill = document.getElementById('barFill');
+    const percentEl = document.getElementById('percent');
+    const pakControls = document.getElementById('pakControls');
+    const pakChooser = document.getElementById('pakChooser');
+    const pakInput = document.getElementById('pakInput');
+    const pakName = document.getElementById('pakName');
+    const startBtn = document.getElementById('startBtn');
+    const logEl = document.getElementById('log');
+    const errorActions = document.getElementById('errorActions');
+    const copyLogBtn = document.getElementById('copyLogBtn');
+
+    let progressValue = 0;
+    let runtimePrepared = false;
+    let gamePrepared = false;
+    let gameStarted = false;
+    let uploadsMounted = false;
+
+    const logLines = [];
+    const originalConsole = {
+      log: console.log.bind(console),
+      info: (console.info || console.log).bind(console),
+      warn: (console.warn || console.log).bind(console),
+      error: (console.error || console.log).bind(console),
+    };
+
+    function stringify(value) {
+      try {
+        if (value instanceof Error)
+          return value.stack || `${value.name}: ${value.message}`;
+        if (typeof value === 'string')
+          return value;
+        return JSON.stringify(value);
+      } catch (_) {
+        return String(value);
+      }
+    }
+
+    function appendLog(level, args) {
+      const line = `[${new Date().toLocaleTimeString()}] ${level}: ${(args || []).map(stringify).join(' ')}`;
+      logLines.push(line);
+      if (logLines.length > 400)
+        logLines.shift();
+      logEl.textContent = logLines.join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    console.log = (...args) => { originalConsole.log(...args); appendLog('log', args); };
+    console.info = (...args) => { originalConsole.info(...args); appendLog('info', args); };
+    console.warn = (...args) => { originalConsole.warn(...args); appendLog('warn', args); };
+    console.error = (...args) => { originalConsole.error(...args); appendLog('error', args); };
+
+    function setProgress(value, text) {
+      if (typeof value === 'number' && isFinite(value))
+        progressValue = Math.max(progressValue, Math.max(0, Math.min(1, value)));
+      if (progressValue >= 0.32)
+        barEl.classList.remove('indeterminate');
+      barFill.style.width = `${Math.round(progressValue * 100)}%`;
+      percentEl.textContent = `${Math.round(progressValue * 100)}%`;
+      if (text) {
+        statusEl.textContent = text;
+        console.info('[Boot]', text);
+      }
+    }
+
+    function showError(error) {
+      const message = error && error.message ? error.message : String(error);
+      setProgress(progressValue, `Failed: ${message}`);
+      console.error(error);
+      errorActions.classList.add('show');
+    }
+
+    function formatBytes(bytes) {
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let value = bytes;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+      }
+      return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+    }
+
+    function resizeCanvasToDisplaySize() {
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor((canvas.clientWidth || window.innerWidth) * ratio));
+      const height = Math.max(1, Math.floor((canvas.clientHeight || window.innerHeight) * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        if (typeof Module !== 'undefined' && typeof Module.setCanvasSize === 'function')
+          Module.setCanvasSize(width, height, true);
+      }
+    }
+
+    function scheduleCanvasResize() {
+      resizeCanvasToDisplaySize();
+      requestAnimationFrame(resizeCanvasToDisplaySize);
+      setTimeout(resizeCanvasToDisplaySize, 120);
+    }
+
+    function getFs() {
+      return Module.FS || Module['FS'] || (typeof FS !== 'undefined' ? FS : null);
+    }
+
+    function getIdbfs() {
+      const fs = getFs();
+      return fs && fs.filesystems ? fs.filesystems.IDBFS : null;
+    }
+
+    function getWorkerFs() {
+      const fs = getFs();
+      return fs && fs.filesystems ? fs.filesystems.WORKERFS : null;
+    }
+
+    function ensureDir(path) {
+      const fs = getFs();
+      const parts = path.split('/').filter(Boolean);
+      let current = '';
+      for (const part of parts) {
+        current += '/' + part;
+        if (!fs.analyzePath(current).exists)
+          fs.mkdir(current);
+      }
+    }
+
+    function loadFromIndexedDB(reason) {
+      return new Promise((resolve, reject) => {
+        const fs = getFs();
+        const idbfs = getIdbfs();
+        if (!fs || !idbfs)
+          return resolve();
+        console.info('[Web] loadFromIndexedDB:', reason);
+        fs.syncfs(true, (err) => err ? reject(err) : resolve());
+      });
+    }
+
+    function isLocalFile() {
+      return window.location && window.location.protocol === 'file:';
+    }
+
+    let fsSyncInstalled = false;
+    let fsSyncTimer = null;
+    let fsSyncInProgress = false;
+    let fsSyncPending = false;
+
+    function isPersistentPath(path) {
+      return typeof path === 'string' && (
+        path === '/storage' || path.startsWith('/storage/') ||
+        path === '/mods' || path.startsWith('/mods/')
+      );
+    }
+
+    function forceSyncNow(reason) {
+      const fs = getFs();
+      const idbfs = getIdbfs();
+      if (!fs || !idbfs)
+        return;
+      if (fsSyncInProgress) {
+        fsSyncPending = true;
+        return;
+      }
+      fsSyncInProgress = true;
+      fsSyncPending = false;
+      fs.syncfs(false, (err) => {
+        fsSyncInProgress = false;
+        if (err)
+          console.warn('[Web] Save sync failed:', reason, err);
+        if (fsSyncPending)
+          forceSyncNow('coalesced');
+      });
+    }
+
+    function scheduleSync(reason) {
+      fsSyncPending = true;
+      if (fsSyncTimer)
+        return;
+      fsSyncTimer = setTimeout(() => {
+        fsSyncTimer = null;
+        forceSyncNow(reason || 'debounced');
+      }, 1000);
+    }
+
+    function installFsSyncHooks() {
+      if (fsSyncInstalled)
+        return;
+      const fs = getFs();
+      if (!fs)
+        return;
+      fsSyncInstalled = true;
+
+      const origWriteFile = fs.writeFile.bind(fs);
+      fs.writeFile = function(path, data, opts) {
+        const result = origWriteFile(path, data, opts);
+        if (isPersistentPath(path))
+          scheduleSync('writeFile');
+        return result;
+      };
+
+      const origClose = fs.close.bind(fs);
+      fs.close = function(stream) {
+        const result = origClose(stream);
+        if (stream && isPersistentPath(stream.path))
+          scheduleSync('close');
+        return result;
+      };
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden')
+          forceSyncNow('visibility');
+      });
+      window.addEventListener('pagehide', () => forceSyncNow('pagehide'));
+      window.addEventListener('beforeunload', () => forceSyncNow('beforeunload'));
+      setInterval(() => forceSyncNow('interval'), 15000);
+    }
+
+    async function ensureFsReady() {
+      const fs = getFs();
+      const idbfs = getIdbfs();
+      ensureDir('/uploads');
+      ensureDir('/storage');
+      ensureDir('/mods');
+      ensureDir('/overrides');
+
+      if (isLocalFile())
+        console.info('[Web] Running from file://. IndexedDB persistence is browser-dependent.');
+
+      if (!idbfs) {
+        console.warn('[Web] IDBFS missing; saves will not persist.');
+        return;
+      }
+
+      try {
+        fs.mount(idbfs, {}, '/storage');
+      } catch (err) {
+        if (!(err && (err.errno === 10 || String(err).includes('EBUSY'))))
+          throw err;
+      }
+
+      try {
+        fs.mount(idbfs, {}, '/mods');
+      } catch (err) {
+        if (!(err && (err.errno === 10 || String(err).includes('EBUSY'))))
+          throw err;
+      }
+
+      try {
+        await loadFromIndexedDB('startup');
+      } catch (err) {
+        console.warn('[Web] Could not load IndexedDB data; continuing with in-memory saves for this run:', err);
+      }
+    }
+
+    function ensurePreloadConfig() {
+      const fs = getFs();
+      const targetPath = '/overrides/preload.config';
+      if (!fs.analyzePath(targetPath).exists)
+        fs.writeFile(targetPath, JSON.stringify(OPENSTARBOUND_PRELOAD_CONFIG, null, 2));
+    }
+
+    function mountPakWithWorkerFs(file) {
+      const fs = getFs();
+      const workerFs = getWorkerFs();
+      if (!workerFs)
+        return false;
+
+      if (uploadsMounted) {
+        fs.unmount('/uploads');
+        uploadsMounted = false;
+      }
+
+      fs.mount(workerFs, { files: [file] }, '/uploads');
+      uploadsMounted = true;
+      return fs.analyzePath('/uploads/packed.pak').exists;
+    }
+
+    async function copyPakToMemfs(file) {
+      const fs = getFs();
+      const chunkSize = 4 * 1024 * 1024;
+      const finalPath = '/uploads/packed.pak';
+      const tempPath = '/uploads/packed.pak.tmp';
+
+      if (fs.analyzePath(finalPath).exists)
+        fs.unlink(finalPath);
+      if (fs.analyzePath(tempPath).exists)
+        fs.unlink(tempPath);
+
+      const fd = fs.open(tempPath, 'w');
+      let written = 0;
+      try {
+        while (written < file.size) {
+          const chunk = new Uint8Array(await file.slice(written, written + chunkSize).arrayBuffer());
+          fs.write(fd, chunk, 0, chunk.length, written);
+          written += chunk.length;
+          const moving = 0.60 + Math.min(0.25, (written / Math.max(1, file.size)) * 0.25);
+          setProgress(moving, `Copying packed.pak... ${formatBytes(written)} of ${formatBytes(file.size)}`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      } finally {
+        fs.close(fd);
+      }
+
+      fs.rename(tempPath, finalPath);
+      return true;
+    }
+
+    async function ensurePakAvailable(file) {
+      if (!file)
+        throw new Error('Choose packed.pak first.');
+      if (file.name !== 'packed.pak')
+        throw new Error(`Expected a file named packed.pak, got ${file.name}.`);
+
+      const fs = getFs();
+      ensureDir('/uploads');
+
+      setProgress(0.60, `Using ${file.name} (${formatBytes(file.size)})...`);
+      if (mountPakWithWorkerFs(file)) {
+        console.info('[Web] mounted packed.pak with WORKERFS:', formatBytes(file.size));
+        return;
+      }
+
+      console.warn('[Web] WORKERFS is unavailable; copying packed.pak into memory.');
+      await copyPakToMemfs(file);
+    }
+
+    function writeBootConfig() {
+      const fs = getFs();
+      const sbinit = {
+        assetDirectories: ["/mods"],
+        assetSources: ["/overrides", "/uploads/packed.pak"],
+        storageDirectory: "/storage",
+        logDirectory: "/storage/logs",
+        logFileBackups: 1,
+        includeUGC: false,
+        assetsSettings: {
+          workerPoolSize: 0
+        },
+        defaultConfiguration: {
+          safe: {
+            enableImGui: false
+          }
+        }
+      };
+      fs.writeFile('/sbinit.config', JSON.stringify(sbinit, null, 2));
+    }
+
+    function enablePakPicker() {
+      pakControls.classList.add('show');
+      pakChooser.classList.remove('disabled');
+      pakInput.disabled = false;
+      pakName.textContent = 'Select packed.pak from your Starbound assets.';
+      pakInput.focus();
+    }
+
+    async function prepareRuntime() {
+      try {
+        setProgress(0.35, 'Loading save data...');
+        await ensureFsReady();
+        installFsSyncHooks();
+        setProgress(0.45, 'Writing preload configuration...');
+        ensurePreloadConfig();
+        runtimePrepared = true;
+        setProgress(0.55, 'Choose packed.pak to continue.');
+        enablePakPicker();
+      } catch (err) {
+        showError(err);
+      }
+    }
+
+    async function prepareSelectedPak(file) {
+      try {
+        if (!runtimePrepared)
+          throw new Error('Runtime filesystem is not ready yet.');
+        if (!file)
+          throw new Error('Choose packed.pak first.');
+        gamePrepared = false;
+        startBtn.disabled = true;
+        startBtn.classList.remove('show');
+        pakName.textContent = `${file.name} (${formatBytes(file.size)})`;
+        await ensurePakAvailable(file);
+        setProgress(0.88, 'Writing launch configuration...');
+        writeBootConfig();
+        setProgress(1, 'Ready.');
+        gamePrepared = true;
+        startBtn.disabled = false;
+        startBtn.classList.add('show');
+        startBtn.focus();
+      } catch (err) {
+        showError(err);
+      }
+    }
+
+    async function unlockAudio() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass)
+        return;
+      try {
+        const ctx = new AudioContextClass();
+        if (ctx.state === 'suspended')
+          await ctx.resume();
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start(0);
+        setTimeout(() => ctx.close().catch(() => {}), 500);
+      } catch (err) {
+        console.warn('[Web] Audio unlock failed:', err);
+      }
+    }
+
+    async function startGame() {
+      if (!gamePrepared || gameStarted)
+        return;
+      gameStarted = true;
+      startBtn.disabled = true;
+      setProgress(1, 'Starting game...');
+      await unlockAudio();
+      scheduleCanvasResize();
+      boot.classList.add('done');
+      canvas.focus();
+
+      if (typeof Module.callMain !== 'function')
+        throw new Error('Runtime not ready: callMain is unavailable.');
+
+      console.info('[Web] callMain()');
+      Module.callMain([]);
+    }
+
+    startBtn.addEventListener('click', () => {
+      startGame().catch((err) => {
+        gameStarted = false;
+        boot.classList.remove('done');
+        showError(err);
+      });
+    });
+
+    pakInput.addEventListener('change', () => {
+      const file = pakInput.files && pakInput.files[0] ? pakInput.files[0] : null;
+      prepareSelectedPak(file).catch(showError);
+    });
+
+    copyLogBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(logLines.join('\n'));
+      } catch (err) {
+        console.warn('[Web] Could not copy log:', err);
+      }
+    });
+
+    canvas.addEventListener('pointerdown', () => canvas.focus());
+    window.addEventListener('resize', scheduleCanvasResize);
+    window.addEventListener('error', (event) => showError(event.error || event.message));
+    window.addEventListener('unhandledrejection', (event) => showError(event.reason));
+
+    var Module = {
+      preRun: [],
+      postRun: [],
+      noInitialRun: true,
+      print: (...args) => console.log(...args),
+      printErr: (...args) => console.error(...args),
+      canvas,
+      setStatus: (text) => {
+        if (text)
+          setProgress(progressValue, text);
+      },
+      monitorRunDependencies: (left) => {
+        if (left > 0) {
+          const estimate = Math.max(1, Module.totalDependencies || left);
+          Module.totalDependencies = Math.max(estimate, left);
+          setProgress(0.05 + (1 - left / Module.totalDependencies) * 0.25, `Loading runtime files... ${left} remaining`);
+        } else {
+          setProgress(0.32, 'Runtime loaded.');
+        }
+      },
+      onAbort: (reason) => showError(new Error('Runtime aborted: ' + reason)),
+      onExit: (code) => console.info('[Web] Exit:', code),
+      onRuntimeInitialized: () => {
+        console.info('[Web] Runtime initialized');
+        scheduleCanvasResize();
+        prepareRuntime();
+      },
+    };
+
+    setProgress(0.02, 'Chrome is parsing the offline runtime.');
+    console.info('[Boot] During this phase Chrome is parsing/executing the inline Emscripten script. JavaScript cannot report fine-grained progress until that script yields control.');
+  </script>
+
+  {{{ SCRIPT }}}
+</body>
+</html>

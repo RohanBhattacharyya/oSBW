@@ -6,6 +6,10 @@
 #include "StarAssets.hpp"
 #include "StarPlayer.hpp"
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/eventloop.h>
+#endif
+
 namespace Star {
 
 WorldServerThread::WorldServerThread(WorldServerPtr server, WorldId worldId)
@@ -21,6 +25,12 @@ WorldServerThread::WorldServerThread(WorldServerPtr server, WorldId worldId)
 
 WorldServerThread::~WorldServerThread() {
   m_stop = true;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId) {
+    emscripten_clear_interval(m_webIntervalId);
+    m_webIntervalId = 0;
+  }
+#endif
   join();
 
   RecursiveMutexLocker locker(m_mutex);
@@ -35,12 +45,56 @@ WorldId WorldServerThread::worldId() const {
 void WorldServerThread::start() {
   m_stop = false;
   m_errorOccurred = false;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId)
+    return;
+
+  auto& root = Root::singleton();
+  String serverFidelityMode = root.configuration()->get("serverFidelity").toString();
+  m_webLockedFidelity = {};
+  if (!serverFidelityMode.equalsIgnoreCase("automatic"))
+    m_webLockedFidelity = WorldServerFidelityNames.getLeft(serverFidelityMode);
+
+  m_webStorageInterval = root.assets()->json("/universe_server.config:worldStorageInterval").toDouble() / 1000.0;
+  m_webStorageTimer.restart(m_webStorageInterval);
+
+  m_webIntervalId = emscripten_set_interval(
+    [](void* userData) {
+      auto world = static_cast<WorldServerThread*>(userData);
+      if (world->m_stop || world->m_errorOccurred) {
+        if (world->m_webIntervalId)
+          emscripten_clear_interval(world->m_webIntervalId);
+        world->m_webIntervalId = 0;
+        return;
+      }
+
+      auto fidelity = world->m_webLockedFidelity.value(WorldServerFidelity::Medium);
+      LogMap::set(strf("server_{}_fidelity", world->m_worldId), WorldServerFidelityNames.getRight(fidelity));
+      world->update(fidelity);
+
+      if (world->m_webStorageTimer.timeUp()) {
+        world->sync();
+        world->m_webStorageTimer.restart(world->m_webStorageInterval);
+      }
+    },
+    ServerGlobalTimestep * 1000.0f,
+    this);
+#else
   Thread::start();
+#endif
 }
 
 void WorldServerThread::stop() {
   m_stop = true;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId) {
+    emscripten_clear_interval(m_webIntervalId);
+    m_webIntervalId = 0;
+  }
+  sync();
+#else
   Thread::join();
+#endif
 }
 
 void WorldServerThread::setPause(shared_ptr<const atomic<bool>> pause) {

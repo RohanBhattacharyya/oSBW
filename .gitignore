@@ -42,6 +42,7 @@ _deps
 
 dist-web/
 dist-web-pthreads/
+dist-web-offline/
 
 
 .vscode/
@@ -51,3 +52,5 @@ dist-web-pthreads/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+packed.pak

@@ -284,7 +284,9 @@ Voice::Voice(ApplicationControllerPtr appController) : m_encoder(nullptr, opus_e
   m_applicationController = appController;
 
   m_stopThread = false;
+#if !defined(STAR_SYSTEM_EMSCRIPTEN) || defined(__EMSCRIPTEN_PTHREADS__)
   m_thread = Thread::invoke("Voice::thread", mem_fn(&Voice::thread), this);
+#endif
 
   s_singleton = this;
 }
@@ -297,7 +299,9 @@ Voice::~Voice() {
     m_threadCond.broadcast();
   }
 
+#if !defined(STAR_SYSTEM_EMSCRIPTEN) || defined(__EMSCRIPTEN_PTHREADS__)
   m_thread.finish();
+#endif
 
   if (m_nextSaveTime)
     save();

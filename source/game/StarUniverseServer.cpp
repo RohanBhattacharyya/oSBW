@@ -20,6 +20,10 @@
 #include "StarVersioningDatabase.hpp"
 #include "StarWorldTemplate.hpp"
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/eventloop.h>
+#endif
+
 namespace Star {
 
 UniverseServer::UniverseServer(String const& storageDir)
@@ -134,6 +138,13 @@ UniverseConnection UniverseServer::addLocalClient() {
 
 void UniverseServer::stop() {
   m_stop = true;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webIntervalId) {
+    emscripten_clear_interval(m_webIntervalId);
+    m_webIntervalId = 0;
+  }
+  m_webLoopRunning = false;
+#endif
 }
 
 void UniverseServer::setPause(bool pause) {
@@ -165,6 +176,41 @@ void UniverseServer::setTimescale(float timescale) {
 
 void UniverseServer::setTickRate(float tickRate) {
   ServerGlobalTimestep = 1.0f / tickRate;
+}
+
+bool UniverseServer::start() {
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  if (m_webLoopRunning)
+    return false;
+
+  m_stop = false;
+  m_webLoopRunning = true;
+  Logger::info("UniverseServer: Starting cooperative UniverseServer with UUID: {}", m_universeSettings->uuid().hex());
+  int mainWakeupInterval = Root::singleton().assets()->json("/universe_server.config:mainWakeupInterval").toInt();
+  m_webIntervalId = emscripten_set_interval(
+    [](void* userData) {
+      auto server = static_cast<UniverseServer*>(userData);
+      if (server->m_stop) {
+        if (server->m_webIntervalId)
+          emscripten_clear_interval(server->m_webIntervalId);
+        server->m_webIntervalId = 0;
+        server->m_webLoopRunning = false;
+        return;
+      }
+      server->updateMainLoop(server->m_webTcpServer);
+      if (server->m_stop) {
+        if (server->m_webIntervalId)
+          emscripten_clear_interval(server->m_webIntervalId);
+        server->m_webIntervalId = 0;
+        server->m_webLoopRunning = false;
+      }
+    },
+    mainWakeupInterval,
+    this);
+  return true;
+#else
+  return Thread::start();
+#endif
 }
 
 List<WorldId> UniverseServer::activeWorlds() const {
@@ -532,6 +578,75 @@ bool UniverseServer::sendPacket(ConnectionId clientId, PacketPtr packet) {
   return false;
 }
 
+void UniverseServer::updateMainLoop(TcpServerPtr& tcpServer) {
+  if (m_tcpState == TcpState::Yes && !tcpServer) {
+    auto& root = Root::singleton();
+    auto configuration = root.configuration();
+    auto assets = root.assets();
+    HostAddressWithPort bindAddress(configuration->get("gameServerBind").toString(), configuration->get("gameServerPort").toUInt());
+    unsigned maxPendingConnections = assets->json("/universe_server.config:maxPendingConnections").toInt();
+
+    Logger::info("UniverseServer: listening for incoming TCP connections on {}", bindAddress);
+
+    try {
+      tcpServer = make_shared<TcpServer>(bindAddress);
+      tcpServer->setAcceptCallback([this, maxPendingConnections](TcpSocketPtr socket) {
+        RecursiveMutexLocker acceptThreadsLocker(m_connectionAcceptThreadsMutex);
+        if (m_connectionAcceptThreads.size() < maxPendingConnections) {
+          Logger::info("UniverseServer: Connection received from: {}", socket->remoteAddress());
+          m_connectionAcceptThreads.append(Thread::invoke("UniverseServer::acceptConnection", [this, socket]() {
+            acceptConnection(UniverseConnection(TcpPacketSocket::open(socket)), socket->remoteAddress().address());
+          }));
+        } else {
+          Logger::warn("UniverseServer: maximum pending connections, dropping connection from: {}", socket->remoteAddress().address());
+        }
+      });
+    } catch (StarException const& e) {
+      Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", e.what());
+      m_tcpState = TcpState::Fuck;
+      tcpServer.reset();
+    } catch (std::exception const& e) {
+      Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", outputException(e, true));
+      m_tcpState = TcpState::Fuck;
+      tcpServer.reset();
+    } catch (...) {
+      Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: unknown exception");
+      m_tcpState = TcpState::Fuck;
+      tcpServer.reset();
+    }
+  } else if (m_tcpState == TcpState::No && tcpServer) {
+    Logger::info("UniverseServer: Not listening for incoming TCP connections");
+    tcpServer.reset();
+  }
+
+  LogMap::set("universe_time", m_universeClock->time());
+
+  try {
+    updateLua();
+    processUniverseFlags();
+    removeTimedBan();
+    sendPendingChat();
+    updateTeams();
+    updateShips();
+    sendClockUpdates();
+    kickErroredPlayers();
+    reapConnections();
+    processPlanetTypeChanges();
+    warpPlayers();
+    flyShips();
+    arriveShips();
+    processChat();
+    sendClientContextUpdates();
+    respondToCelestialRequests();
+    clearBrokenWorlds();
+    handleWorldMessages();
+    shutdownInactiveWorlds();
+    doTriggeredStorage();
+  } catch (std::exception const& e) {
+    Logger::error("UniverseServer: exception caught: {}", outputException(e, true));
+  }
+}
+
 void UniverseServer::run() {
   Logger::info("UniverseServer: Starting UniverseServer with UUID: {}", m_universeSettings->uuid().hex());
 
@@ -540,73 +655,7 @@ void UniverseServer::run() {
   TcpServerPtr tcpServer;
 
   while (!m_stop) {
-    if (m_tcpState == TcpState::Yes && !tcpServer) {
-      auto& root = Root::singleton();
-      auto configuration = root.configuration();
-      auto assets = root.assets();
-      HostAddressWithPort bindAddress(configuration->get("gameServerBind").toString(), configuration->get("gameServerPort").toUInt());
-      unsigned maxPendingConnections = assets->json("/universe_server.config:maxPendingConnections").toInt();
-
-      Logger::info("UniverseServer: listening for incoming TCP connections on {}", bindAddress);
-
-      try {
-        tcpServer = make_shared<TcpServer>(bindAddress);
-        tcpServer->setAcceptCallback([this, maxPendingConnections](TcpSocketPtr socket) {
-          RecursiveMutexLocker acceptThreadsLocker(m_connectionAcceptThreadsMutex);
-          if (m_connectionAcceptThreads.size() < maxPendingConnections) {
-            Logger::info("UniverseServer: Connection received from: {}", socket->remoteAddress());
-            m_connectionAcceptThreads.append(Thread::invoke("UniverseServer::acceptConnection", [this, socket]() {
-              acceptConnection(UniverseConnection(TcpPacketSocket::open(socket)), socket->remoteAddress().address());
-            }));
-          } else {
-            Logger::warn("UniverseServer: maximum pending connections, dropping connection from: {}", socket->remoteAddress().address());
-          }
-        });
-      } catch (StarException const& e) {
-        Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", e.what());
-        m_tcpState = TcpState::Fuck;
-        tcpServer.reset();
-      } catch (std::exception const& e) {
-        Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: {}", outputException(e, true));
-        m_tcpState = TcpState::Fuck;
-        tcpServer.reset();
-      } catch (...) {
-        Logger::error("UniverseServer: Error setting up TCP, cannot accept connections: unknown exception");
-        m_tcpState = TcpState::Fuck;
-        tcpServer.reset();
-      }
-    } else if (m_tcpState == TcpState::No && tcpServer) {
-      Logger::info("UniverseServer: Not listening for incoming TCP connections");
-      tcpServer.reset();
-    }
-
-    LogMap::set("universe_time", m_universeClock->time());
-
-    try {
-      updateLua();
-      processUniverseFlags();
-      removeTimedBan();
-      sendPendingChat();
-      updateTeams();
-      updateShips();
-      sendClockUpdates();
-      kickErroredPlayers();
-      reapConnections();
-      processPlanetTypeChanges();
-      warpPlayers();
-      flyShips();
-      arriveShips();
-      processChat();
-      sendClientContextUpdates();
-      respondToCelestialRequests();
-      clearBrokenWorlds();
-      handleWorldMessages();
-      shutdownInactiveWorlds();
-      doTriggeredStorage();
-    } catch (std::exception const& e) {
-      Logger::error("UniverseServer: exception caught: {}", outputException(e, true));
-    }
-
+    updateMainLoop(tcpServer);
     Thread::sleep(mainWakeupInterval);
   }
 

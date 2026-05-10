@@ -22,6 +22,7 @@ public:
   void removeClient(ConnectionId clientId);
 
   void setPause(shared_ptr<const atomic<bool>> pause);
+  bool start();
   void run() override;
   void stop();
 
@@ -66,6 +67,10 @@ private:
   List<InstanceWorldId> m_activeInstanceWorlds;
   Map<ConnectionId, List<PacketPtr>> m_outgoingPacketQueue;
   List<pair<ConnectionId, PacketPtr>> m_incomingPacketQueue;
+
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  int m_webIntervalId = 0;
+#endif
 };
 
 

@@ -4,7 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenStarbound (Web)</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+@STAR_WEB_JSZIP_INLINE@
+  </script>
   <style>
     html,
     body {
@@ -197,6 +199,11 @@
   </div>
 
   <script>
+    const OPENSTARBOUND_OFFLINE = @STAR_WEB_OFFLINE_JS@;
+    const OPENSTARBOUND_PRELOAD_CONFIG = [
+      { type: "json", path: "/player.config:inventoryFilters" }
+    ];
+
     // Capture console output so users can export it without opening DevTools.
     // Includes Module.print/printErr (stdout/stderr), console.*, and window error events.
     const ConsoleCapture = (() => {
@@ -974,6 +981,12 @@
       if (fs.analyzePath(targetPath).exists)
         return;
 
+      if (OPENSTARBOUND_OFFLINE) {
+        fs.writeFile(targetPath, JSON.stringify(OPENSTARBOUND_PRELOAD_CONFIG, null, 2));
+        console.info('[Web] Wrote embedded preload.config to /overrides');
+        return;
+      }
+
       try {
         const resp = await fetch('preload.config', { cache: 'no-store' });
         if (!resp.ok)
@@ -983,9 +996,7 @@
         console.info('[Web] Wrote preload.config to /overrides');
       } catch (err) {
         console.warn('[Web] Failed to fetch preload.config, using minimal default', err);
-        const fallback = JSON.stringify([
-          { type: "json", path: "/player.config:inventoryFilters" }
-        ], null, 2);
+        const fallback = JSON.stringify(OPENSTARBOUND_PRELOAD_CONFIG, null, 2);
         fs.writeFile(targetPath, fallback);
       }
     }
@@ -1057,6 +1068,61 @@
     }
 
     async function ensurePakAvailable(file) {
+      if (OPENSTARBOUND_OFFLINE) {
+        const fs = getFs();
+        if (!fs)
+          throw new Error('Filesystem not ready yet.');
+        if (!fs.analyzePath('/uploads/packed.pak').exists) {
+          if (!fs.analyzePath('/uploads/packed.pak.gz').exists)
+            throw new Error('Embedded packed.pak is missing from the offline build.');
+          if (typeof DecompressionStream !== 'function')
+            throw new Error('This browser cannot decompress the embedded packed.pak.gz offline.');
+
+          setUploadProgress(0);
+          setStatus('Decompressing embedded packed.pak...');
+
+          const packedPakPath = '/uploads/packed.pak';
+          const packedPakTempPath = '/uploads/packed.pak.tmp';
+
+          try {
+            if (fs.analyzePath(packedPakTempPath).exists)
+              fs.unlink(packedPakTempPath);
+          } catch (_) {
+          }
+
+          const compressedPak = fs.readFile('/uploads/packed.pak.gz');
+          const stream = new Blob([compressedPak]).stream().pipeThrough(new DecompressionStream('gzip'));
+          const reader = stream.getReader();
+          const fd = fs.open(packedPakTempPath, 'w+');
+          let written = 0;
+          try {
+            while (true) {
+              const result = await reader.read();
+              if (result.done)
+                break;
+
+              const chunk = result.value instanceof Uint8Array ? result.value : new Uint8Array(result.value);
+              fs.write(fd, chunk, 0, chunk.length, written);
+              written += chunk.length;
+              setStatus(`Decompressing embedded packed.pak... ${formatBytes(written)}`);
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+          } finally {
+            fs.close(fd);
+          }
+
+          fs.rename(packedPakTempPath, packedPakPath);
+
+          try {
+            fs.unlink('/uploads/packed.pak.gz');
+          } catch (_) {
+          }
+        }
+        setUploadProgress(1);
+        setStatus('Using embedded packed.pak');
+        return;
+      }
+
       const size = typeof file.size === 'number' ? file.size : 0;
       if (canUseWorkerFs()) {
         setStatus('Mounting packed.pak...');
@@ -1118,8 +1184,15 @@
       runtimeReady = true;
       let modUploadPending = false;
 
+      if (OPENSTARBOUND_OFFLINE) {
+        const pakLabel = input && input.closest ? input.closest('label') : null;
+        if (pakLabel)
+          pakLabel.style.display = 'none';
+      }
+
       const updateStartButton = () => {
-        startBtn.disabled = !(runtimeReady && input.files && input.files.length > 0 && !modUploadPending);
+        const hasAssets = OPENSTARBOUND_OFFLINE || (input.files && input.files.length > 0);
+        startBtn.disabled = !(runtimeReady && hasAssets && !modUploadPending);
       };
 
       waitForFsAvailable().then(updateStartButton).catch(() => {
@@ -1375,7 +1448,7 @@
       });
 
       startBtn.addEventListener('click', async () => {
-        if (!input.files || input.files.length === 0) {
+        if (!OPENSTARBOUND_OFFLINE && (!input.files || input.files.length === 0)) {
           setStatus('Please select packed.pak');
           return;
         }
@@ -1389,7 +1462,7 @@
           await ensurePreloadConfig();
           hideUploadProgress();
           setStatus('Loading game assets...');
-          await ensurePakAvailable(input.files[0]);
+          await ensurePakAvailable(OPENSTARBOUND_OFFLINE ? null : input.files[0]);
           hideUploadProgress();
           setStatus('Writing config...');
           writeBootConfig();
@@ -1426,7 +1499,10 @@
       });
 
       updateStartButton();
-      setStatus('Ready. Select packed.pak, optionally install mods, then Start.');
+      if (OPENSTARBOUND_OFFLINE)
+        setStatus('Ready. Embedded assets loaded; optionally install mods, then Start.');
+      else
+        setStatus('Ready. Select packed.pak, optionally install mods, then Start.');
 
       // Load persisted mods from IndexedDB on startup
       ensureFsReady().then(() => {

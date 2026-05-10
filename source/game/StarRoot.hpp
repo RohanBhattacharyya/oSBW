@@ -196,6 +196,7 @@ private:
 
   // m_configurationMutex must be held when calling
   void writeConfig();
+  void maintenanceStep();
 
   Settings m_settings;
 

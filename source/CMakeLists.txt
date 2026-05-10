@@ -150,6 +150,7 @@ option(STAR_USE_RPMALLOC "Use rpmalloc allocators" OFF)
 
 if(EMSCRIPTEN)
   option(STAR_WEB_PTHREADS "Enable Emscripten PThreads (requires COOP/COEP headers)" OFF)
+  option(STAR_WEB_OFFLINE "Build a single-file offline web artifact with packed.pak embedded" OFF)
   option(STAR_WEB_SAFE_HEAP "Enable Emscripten SAFE_HEAP checks (slow; may abort on misaligned accesses)" OFF)
 endif()
 
@@ -195,12 +196,21 @@ message(STATUS "Using rpmalloc: ${STAR_USE_RPMALLOC}")
 
 if(EMSCRIPTEN)
   message(STATUS "Emscripten PThreads: ${STAR_WEB_PTHREADS}")
+  message(STATUS "Emscripten offline single-file: ${STAR_WEB_OFFLINE}")
+endif()
+
+if(EMSCRIPTEN AND STAR_WEB_PTHREADS AND STAR_WEB_OFFLINE)
+  message(FATAL_ERROR "STAR_WEB_PTHREADS and STAR_WEB_OFFLINE are mutually exclusive")
 endif()
 
 if(EMSCRIPTEN AND STAR_WEB_PTHREADS)
   add_definitions(-DSTAR_WEB_PTHREADS)
   add_compile_options(-pthread)
   add_link_options(-pthread)
+endif()
+
+if(EMSCRIPTEN AND STAR_WEB_OFFLINE)
+  add_definitions(-DSTAR_WEB_OFFLINE)
 endif()
 
 # Set C defines and cmake variables based on the build settings we have now
@@ -606,6 +616,8 @@ if(EMSCRIPTEN)
   set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist-web)
   if(STAR_WEB_PTHREADS)
     set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist-web-pthreads)
+  elseif(STAR_WEB_OFFLINE)
+    set(STAR_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/../dist-web-offline)
   endif()
 endif()
 
@@ -694,4 +706,3 @@ if(STAR_BUILD_GUI)
     endif()
   endif()
 endif()
-

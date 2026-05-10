@@ -53,6 +53,10 @@
 #include "StarRadioMessageDatabase.hpp"
 #include "StarCollectionDatabase.hpp"
 
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+#include <emscripten/eventloop.h>
+#endif
+
 namespace Star {
 
 namespace {
@@ -98,65 +102,28 @@ Root::Root(Settings settings) : RootBase() {
 
   Logger::info("Root: Starting maintenance thread...");
   m_stopMaintenanceThread = false;
+#if defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+  Logger::info("Root: Maintenance running on browser event loop");
+  emscripten_set_timeout_loop(
+    [](double, void* userData) -> bool {
+      auto root = static_cast<Root*>(userData);
+      if (root->m_stopMaintenanceThread)
+        return false;
+      root->maintenanceStep();
+      return true;
+    },
+    RootMaintenanceSleep,
+    this);
+#else
   m_maintenanceThread = Thread::invoke("Root::maintenanceMain", [this]() {
       Logger::info("Root: Maintenance thread running");
       MutexLocker locker(m_maintenanceStopMutex);
       while (!m_stopMaintenanceThread) {
-        m_reloadListeners.clearExpiredListeners();
-
-        {
-          MutexLocker locker(m_objectDatabaseMutex);
-          if (ObjectDatabasePtr objectDb = m_objectDatabase) {
-            locker.unlock();
-            objectDb->cleanup();
-          }
-        }
-        {
-          MutexLocker locker(m_itemDatabaseMutex);
-          if (ItemDatabasePtr itemDb = m_itemDatabase) {
-            locker.unlock();
-            itemDb->cleanup();
-          }
-        }
-        {
-          MutexLocker locker(m_monsterDatabaseMutex);
-          if (MonsterDatabasePtr monsterDb = m_monsterDatabase) {
-            locker.unlock();
-            monsterDb->cleanup();
-          }
-        }
-        {
-          MutexLocker locker(m_assetsMutex);
-          if (AssetsPtr assets = m_assets) {
-            locker.unlock();
-            assets->cleanup();
-          }
-        }
-        {
-          MutexLocker locker(m_tenantDatabaseMutex);
-          if (TenantDatabasePtr tenantDb = m_tenantDatabase) {
-            locker.unlock();
-            tenantDb->cleanup();
-          }
-        }
-        {
-          MutexLocker locker(m_imageMetadataDatabaseMutex);
-          if (ImageMetadataDatabasePtr imgMetaDb = m_imageMetadataDatabase) {
-            locker.unlock();
-            imgMetaDb->cleanup();
-          }
-        }
-
-        Random::addEntropy();
-
-        {
-          MutexLocker locker(m_configurationMutex);
-          writeConfig();
-        }
-
+        maintenanceStep();
         m_maintenanceStopCondition.wait(m_maintenanceStopMutex, RootMaintenanceSleep);
       }
     });
+#endif
   Logger::info("Root: Maintenance thread started");
 
   Logger::info("Root: Done preparing Root.");
@@ -170,13 +137,69 @@ Root::~Root() {
     m_stopMaintenanceThread = true;
     m_maintenanceStopCondition.signal();
   }
+#if !defined(STAR_SYSTEM_EMSCRIPTEN) || defined(__EMSCRIPTEN_PTHREADS__)
   m_maintenanceThread.finish();
+#endif
 
   m_reloadListeners.clearAllListeners();
 
   writeConfig();
 
   s_singleton.store(nullptr);
+}
+
+void Root::maintenanceStep() {
+  m_reloadListeners.clearExpiredListeners();
+
+  {
+    MutexLocker locker(m_objectDatabaseMutex);
+    if (ObjectDatabasePtr objectDb = m_objectDatabase) {
+      locker.unlock();
+      objectDb->cleanup();
+    }
+  }
+  {
+    MutexLocker locker(m_itemDatabaseMutex);
+    if (ItemDatabasePtr itemDb = m_itemDatabase) {
+      locker.unlock();
+      itemDb->cleanup();
+    }
+  }
+  {
+    MutexLocker locker(m_monsterDatabaseMutex);
+    if (MonsterDatabasePtr monsterDb = m_monsterDatabase) {
+      locker.unlock();
+      monsterDb->cleanup();
+    }
+  }
+  {
+    MutexLocker locker(m_assetsMutex);
+    if (AssetsPtr assets = m_assets) {
+      locker.unlock();
+      assets->cleanup();
+    }
+  }
+  {
+    MutexLocker locker(m_tenantDatabaseMutex);
+    if (TenantDatabasePtr tenantDb = m_tenantDatabase) {
+      locker.unlock();
+      tenantDb->cleanup();
+    }
+  }
+  {
+    MutexLocker locker(m_imageMetadataDatabaseMutex);
+    if (ImageMetadataDatabasePtr imgMetaDb = m_imageMetadataDatabase) {
+      locker.unlock();
+      imgMetaDb->cleanup();
+    }
+  }
+
+  Random::addEntropy();
+
+  {
+    MutexLocker locker(m_configurationMutex);
+    writeConfig();
+  }
 }
 
 void Root::reload() {
