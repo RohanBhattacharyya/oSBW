@@ -649,6 +649,12 @@ private:
     if (!runFrame()) {
       emscripten_cancel_main_loop();
       shutdown();
+#if defined(STAR_WEB_OFFLINE) && !defined(__EMSCRIPTEN_PTHREADS__)
+      EM_ASM({
+        if (typeof Module !== 'undefined' && typeof Module.onOfflineGameClosed === 'function')
+          Module.onOfflineGameClosed();
+      });
+#endif
     }
   }
 #endif

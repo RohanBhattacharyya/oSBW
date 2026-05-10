@@ -4,15 +4,19 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenStarbound</title>
+  <script>
+@STAR_WEB_JSZIP_INLINE@
+  </script>
   <style>
     html,
     body {
       height: 100%;
       margin: 0;
       overflow: hidden;
-      background: #03070c;
-      color: #eef3ff;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #05070a;
+      color: #e8f4ff;
+      font-family: "Trebuchet MS", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      image-rendering: pixelated;
     }
 
     #canvas {
@@ -31,9 +35,7 @@
       display: grid;
       place-items: center;
       padding: 24px;
-      background:
-        radial-gradient(circle at 50% 18%, rgba(54, 87, 136, 0.28), transparent 34%),
-        linear-gradient(180deg, rgba(3, 7, 12, 0.92), rgba(3, 7, 12, 0.98));
+      background: #070b10;
     }
 
     #boot.done {
@@ -42,28 +44,35 @@
 
     .panel {
       width: min(560px, calc(100vw - 40px));
+      padding: 18px;
+      border: 2px solid #36506a;
+      box-shadow: 0 0 0 2px #04070a, 0 0 0 4px #162331;
+      background: #0b1219;
     }
 
     h1 {
       margin: 0 0 10px;
-      font-size: 28px;
+      font-size: 24px;
       font-weight: 700;
       letter-spacing: 0;
+      text-transform: uppercase;
+      color: #f2c94c;
+      text-shadow: 2px 2px 0 #111;
     }
 
     #status {
       min-height: 22px;
       margin: 0 0 16px;
-      color: #b8c6db;
+      color: #a8c8df;
       font-size: 14px;
     }
 
     .bar {
       position: relative;
-      height: 12px;
+      height: 14px;
       overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid #273b4e;
+      background: #04070a;
     }
 
     .bar.indeterminate::after {
@@ -71,7 +80,7 @@
       position: absolute;
       inset: 0;
       width: 38%;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+      background: #2c5f78;
       transform: translateX(-120%);
       animation: sweep 1.4s linear infinite;
       will-change: transform;
@@ -89,39 +98,49 @@
     #barFill {
       width: 0%;
       height: 100%;
-      background: linear-gradient(90deg, #56d3ff, #9be66f);
+      background: #69d2ff;
       transition: width 180ms ease;
     }
 
     #percent {
       margin-top: 8px;
-      color: #91a1b8;
+      color: #7897ad;
       font-variant-numeric: tabular-nums;
       font-size: 12px;
       text-align: right;
     }
 
-    #pakControls {
+    #pakControls,
+    #toolControls {
       display: none;
       margin-top: 16px;
     }
 
-    #pakControls.show {
+    #pakControls.show,
+    #toolControls.show {
       display: block;
     }
 
-    .filePick {
+    .filePick,
+    .toolBtn {
       display: block;
       width: 100%;
       padding: 13px 16px;
       box-sizing: border-box;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      background: rgba(255, 255, 255, 0.08);
-      color: #eef3ff;
+      border: 2px solid #36506a;
+      background: #111c27;
+      color: #e8f4ff;
       cursor: pointer;
       font-size: 15px;
       font-weight: 800;
       text-align: center;
+      text-transform: uppercase;
+    }
+
+    .filePick:hover,
+    .toolBtn:hover {
+      background: #17283a;
+      border-color: #69d2ff;
     }
 
     .filePick.disabled {
@@ -129,15 +148,23 @@
       opacity: 0.55;
     }
 
-    .filePick input {
+    .filePick input,
+    .toolBtn input {
       display: none;
     }
 
-    #pakName {
+    #pakName,
+    #toolStatus {
       min-height: 18px;
       margin-top: 8px;
-      color: #91a1b8;
+      color: #7897ad;
       font-size: 12px;
+    }
+
+    .toolGrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
     }
 
     #startBtn {
@@ -146,7 +173,7 @@
       margin-top: 18px;
       padding: 13px 16px;
       border: 0;
-      background: #f5c542;
+      background: #f2c94c;
       color: #161006;
       cursor: pointer;
       font-size: 15px;
@@ -162,14 +189,37 @@
       opacity: 0.55;
     }
 
+    #startBtn.loading {
+      position: relative;
+      color: transparent;
+    }
+
+    #startBtn.loading::after {
+      content: "";
+      position: absolute;
+      left: calc(50% - 10px);
+      top: calc(50% - 10px);
+      width: 16px;
+      height: 16px;
+      border: 2px solid #161006;
+      border-right-color: transparent;
+      animation: spin 0.7s steps(8) infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
     #log {
       height: 132px;
       margin-top: 18px;
       padding: 10px;
       overflow: auto;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      background: rgba(0, 0, 0, 0.24);
-      color: #9fb0c7;
+      border: 2px solid #273b4e;
+      background: #05080b;
+      color: #92b3c8;
       font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: pre-wrap;
     }
@@ -190,6 +240,50 @@
       color: #eef3ff;
       cursor: pointer;
     }
+
+    #modsList {
+      max-height: 160px;
+      margin-top: 10px;
+      overflow: auto;
+      border: 2px solid #273b4e;
+      background: #05080b;
+    }
+
+    .modRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-bottom: 1px solid #1b2a39;
+      font-size: 12px;
+    }
+
+    .modRow:last-child {
+      border-bottom: 0;
+    }
+
+    .modRow span {
+      flex: 1;
+      overflow-wrap: anywhere;
+    }
+
+    .miniBtn {
+      border: 1px solid #5b7186;
+      background: #111c27;
+      color: #e8f4ff;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    #uploadProgress {
+      width: 100%;
+      height: 10px;
+      margin-top: 10px;
+      display: none;
+      accent-color: #69d2ff;
+    }
   </style>
 </head>
 <body>
@@ -208,14 +302,33 @@
         </label>
         <div id="pakName"></div>
       </div>
-      <button id="startBtn" type="button" disabled>Click to enable audio and start</button>
+      <div id="toolControls">
+        <div class="toolGrid">
+          <button id="exportSaveBtn" class="toolBtn" type="button">Export Save</button>
+          <label class="toolBtn">
+            Import Save
+            <input id="importSaveInput" type="file" accept=".zip" />
+          </label>
+          <label class="toolBtn">
+            Add Mod Pak
+            <input id="modPakInput" type="file" accept=".pak" multiple />
+          </label>
+          <label class="toolBtn">
+            Add Mod Folder
+            <input id="modDirInput" type="file" webkitdirectory multiple />
+          </label>
+        </div>
+        <progress id="uploadProgress" value="0" max="1"></progress>
+        <div id="toolStatus"></div>
+        <div id="modsList"></div>
+      </div>
+      <button id="startBtn" type="button" disabled>Start</button>
       <div id="errorActions">
         <button id="copyLogBtn" type="button">Copy Log</button>
       </div>
       <div id="log" aria-live="polite"></div>
     </div>
   </div>
-
   <script>
     const OPENSTARBOUND_PRELOAD_CONFIG = [
       { type: "json", path: "/player.config:inventoryFilters" }
@@ -231,6 +344,14 @@
     const pakChooser = document.getElementById('pakChooser');
     const pakInput = document.getElementById('pakInput');
     const pakName = document.getElementById('pakName');
+    const toolControls = document.getElementById('toolControls');
+    const toolStatus = document.getElementById('toolStatus');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const modsList = document.getElementById('modsList');
+    const exportSaveBtn = document.getElementById('exportSaveBtn');
+    const importSaveInput = document.getElementById('importSaveInput');
+    const modPakInput = document.getElementById('modPakInput');
+    const modDirInput = document.getElementById('modDirInput');
     const startBtn = document.getElementById('startBtn');
     const logEl = document.getElementById('log');
     const errorActions = document.getElementById('errorActions');
@@ -405,6 +526,264 @@
         fsSyncTimer = null;
         forceSyncNow(reason || 'debounced');
       }, 1000);
+    }
+
+    function syncToIndexedDB(reason) {
+      return new Promise((resolve, reject) => {
+        const fs = getFs();
+        const idbfs = getIdbfs();
+        if (!fs || !idbfs)
+          return resolve();
+        console.info('[Web] syncToIndexedDB:', reason);
+        fs.syncfs(false, (err) => err ? reject(err) : resolve());
+      });
+    }
+
+    function setToolStatus(text) {
+      if (toolStatus)
+        toolStatus.textContent = text || '';
+      if (text)
+        console.info('[Tools]', text);
+    }
+
+    function setUploadProgress(value) {
+      if (!uploadProgress)
+        return;
+      uploadProgress.style.display = 'block';
+      uploadProgress.value = Math.max(0, Math.min(1, value || 0));
+    }
+
+    function hideUploadProgress() {
+      if (uploadProgress)
+        uploadProgress.style.display = 'none';
+    }
+
+    function removeTree(path) {
+      const fs = getFs();
+      const stat = fs.stat(path);
+      if (fs.isDir(stat.mode)) {
+        for (const name of fs.readdir(path)) {
+          if (name !== '.' && name !== '..')
+            removeTree(`${path}/${name}`);
+        }
+        fs.rmdir(path);
+      } else {
+        fs.unlink(path);
+      }
+    }
+
+    function collectFilesRecursive(basePath, relativePath = '') {
+      const fs = getFs();
+      const files = [];
+      const fullPath = basePath + (relativePath ? `/${relativePath}` : '');
+      if (!fs.analyzePath(fullPath).exists)
+        return files;
+      for (const name of fs.readdir(fullPath)) {
+        if (name === '.' || name === '..')
+          continue;
+        const rel = relativePath ? `${relativePath}/${name}` : name;
+        const path = `${basePath}/${rel}`;
+        const stat = fs.stat(path);
+        if (fs.isDir(stat.mode))
+          files.push(...collectFilesRecursive(basePath, rel));
+        else
+          files.push({ relativePath: rel, fullPath: path, size: stat.size });
+      }
+      return files;
+    }
+
+    function listModsInFs() {
+      const fs = getFs();
+      if (!fs || !fs.analyzePath('/mods').exists)
+        return [];
+      return fs.readdir('/mods')
+        .filter((name) => name !== '.' && name !== '..')
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function renderModsList() {
+      if (!modsList)
+        return;
+      modsList.innerHTML = '';
+      let mods = [];
+      try {
+        mods = listModsInFs();
+      } catch (_) {
+        mods = [];
+      }
+      if (!mods.length) {
+        const row = document.createElement('div');
+        row.className = 'modRow';
+        row.textContent = 'No mods installed';
+        modsList.appendChild(row);
+        return;
+      }
+      for (const name of mods) {
+        const row = document.createElement('div');
+        row.className = 'modRow';
+        const label = document.createElement('span');
+        label.textContent = name;
+        const del = document.createElement('button');
+        del.className = 'miniBtn';
+        del.type = 'button';
+        del.textContent = 'Delete';
+        del.addEventListener('click', async () => {
+          if (!confirm(`Delete mod '${name}' from /mods?`))
+            return;
+          removeTree(`/mods/${name}`);
+          renderModsList();
+          await syncToIndexedDB('deleteMod');
+          setToolStatus('Mod deleted.');
+        });
+        row.append(label, del);
+        modsList.appendChild(row);
+      }
+    }
+
+    async function writeFileFromBlob(path, file, progress) {
+      const fs = getFs();
+      ensureDir(path.split('/').slice(0, -1).join('/') || '/');
+      if (fs.analyzePath(path).exists)
+        fs.unlink(path);
+      const fd = fs.open(path, 'w');
+      const chunkSize = 2 * 1024 * 1024;
+      let written = 0;
+      try {
+        while (written < file.size) {
+          const chunk = new Uint8Array(await file.slice(written, written + chunkSize).arrayBuffer());
+          fs.write(fd, chunk, 0, chunk.length, written);
+          written += chunk.length;
+          if (progress)
+            progress(written, file.size);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      } finally {
+        fs.close(fd);
+      }
+      scheduleSync('writeBlob');
+    }
+
+    async function exportSaveData() {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      if (typeof JSZip === 'undefined')
+        throw new Error('JSZip is missing from the offline shell.');
+
+      await syncToIndexedDB('beforeExport');
+      const zip = new JSZip();
+      const storageFiles = collectFilesRecursive('/storage');
+      const modsFiles = collectFilesRecursive('/mods');
+      const files = [
+        ...storageFiles.map((file) => ({ ...file, prefix: 'storage' })),
+        ...modsFiles.map((file) => ({ ...file, prefix: 'mods' }))
+      ];
+      if (!files.length)
+        throw new Error('No save data or mods to export.');
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        zip.file(`${file.prefix}/${file.relativePath}`, fs.readFile(file.fullPath));
+        setUploadProgress((i + 1) / files.length);
+        setToolStatus(`Packing ${i + 1}/${files.length}`);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      setToolStatus('Compressing archive...');
+      const blob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      }, (meta) => setUploadProgress(meta.percent / 100));
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `openstarbound-save-${stamp}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+      hideUploadProgress();
+      setToolStatus(`Exported ${files.length} files (${formatBytes(blob.size)}).`);
+    }
+
+    async function importSaveData(file) {
+      const fs = getFs();
+      if (!fs)
+        throw new Error('Filesystem not ready yet.');
+      if (typeof JSZip === 'undefined')
+        throw new Error('JSZip is missing from the offline shell.');
+
+      setToolStatus('Reading archive...');
+      const zip = await JSZip.loadAsync(file);
+      const entries = [];
+      zip.forEach((relativePath, zipEntry) => {
+        if (!zipEntry.dir && (relativePath.startsWith('storage/') || relativePath.startsWith('mods/')))
+          entries.push({ relativePath, zipEntry });
+      });
+      if (!entries.length)
+        throw new Error('Archive must contain storage/ or mods/.');
+      if (!confirm(`Import ${entries.length} files?\n\nExisting saves and mods will be replaced.`))
+        return;
+
+      for (const base of ['/storage', '/mods']) {
+        if (!fs.analyzePath(base).exists)
+          ensureDir(base);
+        for (const name of fs.readdir(base)) {
+          if (name !== '.' && name !== '..')
+            removeTree(`${base}/${name}`);
+        }
+      }
+
+      for (let i = 0; i < entries.length; i++) {
+        const { relativePath, zipEntry } = entries[i];
+        const dest = `/${relativePath}`;
+        ensureDir(dest.split('/').slice(0, -1).join('/') || '/');
+        fs.writeFile(dest, await zipEntry.async('uint8array'));
+        setUploadProgress((i + 1) / entries.length);
+        setToolStatus(`Importing ${i + 1}/${entries.length}`);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      await syncToIndexedDB('importSave');
+      hideUploadProgress();
+      renderModsList();
+      setToolStatus('Import complete. Restart the page before playing that save.');
+    }
+
+    async function handleModPakFiles(files) {
+      const list = Array.from(files || []);
+      if (!list.length)
+        return;
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i];
+        setToolStatus(`Installing ${file.name}`);
+        await writeFileFromBlob(`/mods/${file.name}`, file, (written, total) => {
+          setUploadProgress(total ? written / total : 1);
+        });
+      }
+      await syncToIndexedDB('installModPak');
+      hideUploadProgress();
+      renderModsList();
+      setToolStatus('Mods ready.');
+    }
+
+    async function handleModDirectoryFiles(files) {
+      const list = Array.from(files || []).filter((file) => file && (file.webkitRelativePath || file.name));
+      if (!list.length)
+        return;
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i];
+        const rel = file.webkitRelativePath || file.name;
+        setToolStatus(`Installing ${rel}`);
+        await writeFileFromBlob(`/mods/${rel}`, file, (written, total) => {
+          setUploadProgress(total ? written / total : 1);
+        });
+      }
+      await syncToIndexedDB('installModFolder');
+      hideUploadProgress();
+      renderModsList();
+      setToolStatus('Mod folder ready.');
     }
 
     function installFsSyncHooks() {
@@ -595,6 +974,8 @@
         installFsSyncHooks();
         setProgress(0.45, 'Writing preload configuration...');
         ensurePreloadConfig();
+        toolControls.classList.add('show');
+        renderModsList();
         runtimePrepared = true;
         setProgress(0.55, 'Choose packed.pak to continue.');
         enablePakPicker();
@@ -650,22 +1031,40 @@
         return;
       gameStarted = true;
       startBtn.disabled = true;
+      startBtn.classList.add('loading');
+      startBtn.textContent = 'Starting';
       setProgress(1, 'Starting game...');
+      await new Promise((resolve) => requestAnimationFrame(resolve));
       await unlockAudio();
       scheduleCanvasResize();
-      boot.classList.add('done');
-      canvas.focus();
 
       if (typeof Module.callMain !== 'function')
         throw new Error('Runtime not ready: callMain is unavailable.');
 
       console.info('[Web] callMain()');
       Module.callMain([]);
+      boot.classList.add('done');
+      canvas.focus();
+    }
+
+    function returnToShellMenu(message) {
+      gameStarted = false;
+      startBtn.classList.remove('loading');
+      startBtn.textContent = 'Start';
+      startBtn.disabled = !gamePrepared;
+      startBtn.classList.toggle('show', gamePrepared);
+      boot.classList.remove('done');
+      setProgress(1, message || 'Returned to launcher.');
+      renderModsList();
+      startBtn.focus();
     }
 
     startBtn.addEventListener('click', () => {
       startGame().catch((err) => {
         gameStarted = false;
+        startBtn.classList.remove('loading');
+        startBtn.textContent = 'Start';
+        startBtn.disabled = false;
         boot.classList.remove('done');
         showError(err);
       });
@@ -674,6 +1073,57 @@
     pakInput.addEventListener('change', () => {
       const file = pakInput.files && pakInput.files[0] ? pakInput.files[0] : null;
       prepareSelectedPak(file).catch(showError);
+    });
+
+    exportSaveBtn.addEventListener('click', async () => {
+      try {
+        setUploadProgress(0);
+        await exportSaveData();
+      } catch (err) {
+        hideUploadProgress();
+        setToolStatus(`Export failed: ${err.message || err}`);
+        console.error(err);
+      }
+    });
+
+    importSaveInput.addEventListener('change', async () => {
+      const file = importSaveInput.files && importSaveInput.files[0];
+      if (!file)
+        return;
+      try {
+        setUploadProgress(0);
+        await importSaveData(file);
+      } catch (err) {
+        hideUploadProgress();
+        setToolStatus(`Import failed: ${err.message || err}`);
+        console.error(err);
+      } finally {
+        importSaveInput.value = '';
+      }
+    });
+
+    modPakInput.addEventListener('change', async () => {
+      try {
+        await handleModPakFiles(modPakInput.files);
+      } catch (err) {
+        hideUploadProgress();
+        setToolStatus(`Mod install failed: ${err.message || err}`);
+        console.error(err);
+      } finally {
+        modPakInput.value = '';
+      }
+    });
+
+    modDirInput.addEventListener('change', async () => {
+      try {
+        await handleModDirectoryFiles(modDirInput.files);
+      } catch (err) {
+        hideUploadProgress();
+        setToolStatus(`Mod folder failed: ${err.message || err}`);
+        console.error(err);
+      } finally {
+        modDirInput.value = '';
+      }
     });
 
     copyLogBtn.addEventListener('click', async () => {
@@ -709,8 +1159,15 @@
           setProgress(0.32, 'Runtime loaded.');
         }
       },
-      onAbort: (reason) => showError(new Error('Runtime aborted: ' + reason)),
-      onExit: (code) => console.info('[Web] Exit:', code),
+      onAbort: (reason) => {
+        showError(new Error('Runtime aborted: ' + reason));
+        returnToShellMenu('Runtime stopped.');
+      },
+      onExit: (code) => {
+        console.info('[Web] Exit:', code);
+        returnToShellMenu('Game closed.');
+      },
+      onOfflineGameClosed: () => returnToShellMenu('Game closed.'),
       onRuntimeInitialized: () => {
         console.info('[Web] Runtime initialized');
         scheduleCanvasResize();

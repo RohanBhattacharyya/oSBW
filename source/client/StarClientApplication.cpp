@@ -1375,8 +1375,13 @@ void ClientApplication::updateRunning(float dt) {
       LogMap::set("tile_dungeon_id", world->isTileProtected(aim) ? strf("^red;{}", world->dungeonId(aim)) : toString(world->dungeonId(aim)));
     }
 
-    if (m_mainInterface->currentState() == MainInterface::ReturnToTitle)
+    if (m_mainInterface->currentState() == MainInterface::ReturnToTitle) {
+#if defined(STAR_WEB_OFFLINE) && defined(STAR_SYSTEM_EMSCRIPTEN) && !defined(__EMSCRIPTEN_PTHREADS__)
+      appController()->quit();
+#else
       changeState(MainAppState::Title);
+#endif
+    }
 
   } catch (std::exception& e) {
     setError("Exception caught in client main-loop", e);
