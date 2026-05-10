@@ -334,6 +334,155 @@
       { type: "json", path: "/player.config:inventoryFilters" }
     ];
 
+    // General wasm-trap guard for JS-to-wasm event listeners. Emscripten
+    // dispatches focus / mouse / keyboard / gamepad / resize / audio events
+    // through eventListenerFunc which calls into wasm via dynCall. If the
+    // wasm function traps (divide by zero, table index OOB, unreachable),
+    // the RuntimeError propagates out of the listener and Emscripten's
+    // global error path flips ABORT, leaving the rest of the runtime in
+    // "user callback triggered after runtime exited" zombie mode.
+    //
+    // wasm traps don't taint the module - only the trapped call frame
+    // dies. By wrapping every listener installed via addEventListener and
+    // catching WebAssembly.RuntimeError (only that subclass), we keep the
+    // runtime alive and let the next event tick proceed normally.
+    // Non-wasm errors are re-thrown so debugging/dev signals aren't lost.
+    (function installWasmTrapGuard() {
+      if (typeof WebAssembly === 'undefined' || !WebAssembly.RuntimeError)
+        return;
+      const origAdd = EventTarget.prototype.addEventListener;
+      const origRemove = EventTarget.prototype.removeEventListener;
+      let warnedOnce = false;
+      let suppressedCount = 0;
+      const wrapListener = (target, listener) => {
+        if (typeof listener === 'function') {
+          return function(ev) {
+            try { return listener.call(target, ev); }
+            catch (err) {
+              if (err instanceof WebAssembly.RuntimeError) {
+                if (!warnedOnce) {
+                  warnedOnce = true;
+                  console.warn('[Web] WASM trap from event listener (further traps will be counted silently):', ev && ev.type, err);
+                } else {
+                  suppressedCount++;
+                  if ((suppressedCount & 0x3F) === 0)
+                    console.warn('[Web] WASM trap count: ' + (suppressedCount + 1));
+                }
+                return; // swallow - keeps runtime alive
+              }
+              throw err;
+            }
+          };
+        }
+        if (listener && typeof listener.handleEvent === 'function') {
+          return {
+            handleEvent(ev) {
+              try { return listener.handleEvent(ev); }
+              catch (err) {
+                if (err instanceof WebAssembly.RuntimeError) {
+                  if (!warnedOnce) {
+                    warnedOnce = true;
+                    console.warn('[Web] WASM trap from event listener (further traps will be counted silently):', ev && ev.type, err);
+                  } else {
+                    suppressedCount++;
+                  }
+                  return;
+                }
+                throw err;
+              }
+            }
+          };
+        }
+        return listener;
+      };
+      EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (!listener)
+          return origAdd.call(this, type, listener, options);
+        try {
+          if (!listener._opensbWasmWrapped) {
+            const wrapped = wrapListener(this, listener);
+            Object.defineProperty(listener, '_opensbWasmWrapped', { value: wrapped, configurable: true });
+          }
+          return origAdd.call(this, type, listener._opensbWasmWrapped, options);
+        } catch (_) {
+          // Listener object is frozen or otherwise inhospitable; install raw.
+          return origAdd.call(this, type, listener, options);
+        }
+      };
+      EventTarget.prototype.removeEventListener = function(type, listener, options) {
+        if (listener && listener._opensbWasmWrapped)
+          return origRemove.call(this, type, listener._opensbWasmWrapped, options);
+        return origRemove.call(this, type, listener, options);
+      };
+    })();
+
+    // Guard the SDL3 audio callback against wasm traps. SDL3's emscripten
+    // port assigns `scriptProcessorNode.onaudioprocess = fn` where `fn`
+    // calls into wasm via dynCall(); intermittent memory corruption in
+    // the mixer/decoder path can leave the stored function-table index
+    // garbage and the call traps with "table index is out of bounds",
+    // killing the runtime. Wasm traps surface to JS as exceptions, so we
+    // shadow the property setter on each ScriptProcessor instance and
+    // install our wrapped handler via addEventListener so a faulting
+    // audio buffer becomes silence + a logged warning instead of a fatal
+    // abort.
+    (function installAudioCallbackGuard() {
+      const wrapNode = (node) => {
+        let userHandler = null;
+        let warnedOnce = false;
+        let suppressedCount = 0;
+        const handleErr = (err, ev) => {
+          if (!warnedOnce) {
+            warnedOnce = true;
+            console.warn('[Web] Audio callback faulted (further faults will be suppressed):', err);
+          } else {
+            suppressedCount++;
+            if ((suppressedCount & 0x3FF) === 0)
+              console.warn('[Web] Audio callback fault count: ' + (suppressedCount + 1));
+          }
+          try {
+            const buf = ev && ev.outputBuffer;
+            if (buf) {
+              for (let c = 0; c < buf.numberOfChannels; ++c)
+                buf.getChannelData(c).fill(0);
+            }
+          } catch (_) {}
+        };
+        Object.defineProperty(node, 'onaudioprocess', {
+          configurable: true,
+          enumerable: true,
+          get() { return userHandler; },
+          set(fn) {
+            if (node._opensbWrappedAudioListener) {
+              node.removeEventListener('audioprocess', node._opensbWrappedAudioListener);
+              node._opensbWrappedAudioListener = null;
+            }
+            userHandler = fn;
+            if (typeof fn !== 'function')
+              return;
+            const wrapped = function(ev) {
+              try { return fn.call(node, ev); }
+              catch (err) { handleErr(err, ev); }
+            };
+            node._opensbWrappedAudioListener = wrapped;
+            node.addEventListener('audioprocess', wrapped);
+          },
+        });
+      };
+      for (const ctxName of ['AudioContext', 'webkitAudioContext']) {
+        const Ctx = window[ctxName];
+        if (!Ctx || !Ctx.prototype) continue;
+        const origCreate = Ctx.prototype.createScriptProcessor;
+        if (typeof origCreate !== 'function') continue;
+        Ctx.prototype.createScriptProcessor = function() {
+          const node = origCreate.apply(this, arguments);
+          try { wrapNode(node); }
+          catch (e) { console.warn('[Web] Could not install audio-guard wrapper:', e); }
+          return node;
+        };
+      }
+    })();
+
     const canvas = document.getElementById('canvas');
     const boot = document.getElementById('boot');
     const statusEl = document.getElementById('status');

@@ -64,7 +64,16 @@ IF(EMSCRIPTEN)
     @ONLY)
   set_property(TARGET starbound APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html")
 
-  SET(starbound_em_link_flags "--shell-file ${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html -sEXPORTED_RUNTIME_METHODS=callMain,FS,setCanvasSize -sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -sEXCEPTION_DEBUG=1 -sNO_DISABLE_EXCEPTION_CATCHING -sUSE_SDL=3 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sNO_EXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sSTACK_SIZE=5242880 -sDEFAULT_PTHREAD_STACK_SIZE=2097152 -lidbfs.js -lworkerfs.js -lwebsocket.js")
+  # Memory tuning for the offline build:
+  # - INITIAL_MEMORY=256MB: static data section is ~71 MiB; default 16 MiB
+  #   initial memory makes wasm-ld error out once MAXIMUM_MEMORY is set
+  #   explicitly. 256 MiB gives headroom for static + stack + early heap.
+  # - MAXIMUM_MEMORY=4GB: Emscripten defaults the cap to 2 GiB; wasm32
+  #   supports a full 4 GiB address space, and the offline build's
+  #   working set (682 MB pak in MEMFS + engine textures + Lua state +
+  #   world data) reliably crosses 2 GiB in complex areas, causing
+  #   abort() during heap grow. Lift to the wasm32 ceiling.
+  SET(starbound_em_link_flags "--shell-file ${CMAKE_CURRENT_BINARY_DIR}/emscripten_shell.html -sEXPORTED_RUNTIME_METHODS=callMain,FS,setCanvasSize -sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 -sEXCEPTION_DEBUG=1 -sNO_DISABLE_EXCEPTION_CATCHING -sUSE_SDL=3 -sUSE_WEBGL2=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=4GB -sNO_EXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 -sUSE_ZLIB=1 -sUSE_LIBPNG=1 -sUSE_FREETYPE=1 -sUSE_OGG=1 -sUSE_VORBIS=1 -sSTACK_SIZE=5242880 -sDEFAULT_PTHREAD_STACK_SIZE=2097152 -lidbfs.js -lworkerfs.js -lwebsocket.js")
 
   if(STAR_WEB_OFFLINE)
     string(APPEND starbound_em_link_flags " -sSINGLE_FILE=1 -sMINIFY_HTML=0 --embed-file ${PROJECT_SOURCE_DIR}/../assets/opensb@/overrides")

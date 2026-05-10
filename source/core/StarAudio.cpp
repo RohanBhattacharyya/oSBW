@@ -652,12 +652,17 @@ size_t Audio::read(int16_t* buffer, size_t bufferSize) {
 }
 
 size_t Audio::resample(unsigned destinationChannels, unsigned destinationSampleRate, int16_t* destinationBuffer, size_t destinationBufferSize, double velocity) {
+  if (destinationChannels == 0 || destinationSampleRate == 0 || destinationBufferSize == 0)
+    return 0;
+
   unsigned destinationSamples = destinationBufferSize / destinationChannels;
   if (destinationSamples == 0)
     return 0;
 
   unsigned sourceChannels = channels();
   unsigned sourceSampleRate = sampleRate();
+  if (sourceChannels == 0 || sourceSampleRate == 0)
+    return 0;
 
   if (velocity != 1.0)
     sourceSampleRate = (unsigned)(sourceSampleRate * velocity);
